@@ -514,17 +514,17 @@ function HandoffBanner({ notes, onDismiss }) {
 function AdminEmployees({ employees, setEmployees, toast }) {
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: "", pin: "", role: "A", rate: 15 });
+  const [form, setForm] = useState({ name: "", pin: "", rate: 15 });
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
   const openNew = () => {
-    setForm({ name: "", pin: "", role: "A", rate: 15 });
+    setForm({ name: "", pin: "", rate: 15 });
     setEditId(null);
     setShowModal(true);
   };
 
   const openEdit = (emp) => {
-    setForm({ name: emp.name, pin: emp.pin, role: emp.role, rate: emp.rate || 15 });
+    setForm({ name: emp.name, pin: emp.pin, rate: emp.rate || 15 });
     setEditId(emp.id);
     setShowModal(true);
   };
@@ -555,9 +555,6 @@ function AdminEmployees({ employees, setEmployees, toast }) {
     toast.show("Removed " + emp.name, "warning");
   };
 
-  const roleBg = { A: "rgba(124,58,237,.1)", B: "rgba(37,99,235,.08)", C: "rgba(217,119,6,.08)" };
-  const roleColor = { A: "var(--purple)", B: "var(--blue)", C: "var(--amber)" };
-
   return (
     <div>
       <div className="row" style={{marginBottom:18}}>
@@ -567,12 +564,12 @@ function AdminEmployees({ employees, setEmployees, toast }) {
       </div>
       {nonAdmin.map(emp => (
         <div className="emp-card" key={emp.id}>
-          <div className="emp-avatar" style={{background:roleBg[emp.role]||"var(--bg4)",color:roleColor[emp.role]||"var(--text)"}}>
+          <div className="emp-avatar" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>
             {emp.name.charAt(0)}
           </div>
           <div className="emp-info">
             <div className="emp-name">{emp.name}</div>
-            <div className="emp-detail">Role {emp.role} &nbsp;·&nbsp; PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr</div>
+            <div className="emp-detail">PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr</div>
           </div>
           <div className="emp-actions">
             <button className="btn small" onClick={() => openEdit(emp)}>Edit</button>
@@ -592,19 +589,9 @@ function AdminEmployees({ employees, setEmployees, toast }) {
               <label>4-Digit PIN</label>
               <input type="text" maxLength={4} value={form.pin} onChange={e => setForm(f => ({...f, pin: e.target.value.replace(/\D/g,"").slice(0,4)}))} placeholder="e.g. 1234" style={{fontFamily:"var(--mono)",letterSpacing:"4px",fontSize:18,textAlign:"center"}} />
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <div className="form-group">
-                <label>Role</label>
-                <select value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))}>
-                  <option value="A">Role A</option>
-                  <option value="B">Role B</option>
-                  <option value="C">Role C</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Hourly Rate ($)</label>
-                <input type="number" min={0} step={0.5} value={form.rate} onChange={e => setForm(f => ({...f, rate: parseFloat(e.target.value)||0}))} />
-              </div>
+            <div className="form-group">
+              <label>Hourly Rate ($)</label>
+              <input type="number" min={0} step={0.5} value={form.rate} onChange={e => setForm(f => ({...f, rate: parseFloat(e.target.value)||0}))} />
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => setShowModal(false)}>Cancel</button>
@@ -651,99 +638,50 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
-  // Dynamic rows: each row picks an employee via dropdown
-  // Stored per week in localStorage
-  const loadRows = (ws) => {
-    try { return JSON.parse(localStorage.getItem("crewos_sched_rows_" + ws)) || []; } catch { return []; }
-  };
-  const [rows, setRows] = useState(() => loadRows(weekStart));
-  const saveRows = (ws, r) => { localStorage.setItem("crewos_sched_rows_" + ws, JSON.stringify(r)); };
+  const ROLE_OPTIONS = [
+    { val: "", label: "No Role" },
+    { val: "A", label: "Role A" },
+    { val: "B", label: "Role B" },
+    { val: "C", label: "Role C" },
+  ];
 
-  // When week changes, load that week's rows
-  const prevWeekRef = useRef(weekStart);
-  useEffect(() => {
-    if (prevWeekRef.current !== weekStart) {
-      setRows(loadRows(weekStart));
-      prevWeekRef.current = weekStart;
-    }
-  }, [weekStart]);
-  // Save rows whenever they change
-  useEffect(() => { saveRows(weekStart, rows); }, [rows, weekStart]);
-
-  // schedule keys: weekStart_empId_dayIdx = { on, start, end }
+  // schedule keys: weekStart_empId_dayIdx = { on, start, end, shiftRole }
   const getCell = (empId, dayIdx) => {
-    if (!empId) return { on: false, start: "09:00", end: "17:00" };
     const key = weekStart + "_" + empId + "_" + dayIdx;
-    return schedule[key] || { on: false, start: "09:00", end: "17:00" };
+    return schedule[key] || { on: false, start: "09:00", end: "17:00", shiftRole: "" };
   };
   const setCell = (empId, dayIdx, updates) => {
-    if (!empId) return;
     const key = weekStart + "_" + empId + "_" + dayIdx;
     const cur = getCell(empId, dayIdx);
     setSchedule(prev => ({ ...prev, [key]: { ...cur, ...updates } }));
   };
 
-  const addRow = () => {
-    setRows(prev => [...prev, { id: uid(), empId: "" }]);
-  };
-
-  const removeRow = (rowId, empId) => {
-    // Clear schedule data for this employee this week
-    if (empId) {
-      const ns = { ...schedule };
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + empId + "_" + d]; }
-      setSchedule(ns);
-    }
-    setRows(prev => prev.filter(r => r.id !== rowId));
-  };
-
-  const changeRowEmployee = (rowId, oldEmpId, newEmpId) => {
-    // If switching employee, clear old employee's schedule data
-    if (oldEmpId && oldEmpId !== newEmpId) {
-      const ns = { ...schedule };
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + oldEmpId + "_" + d]; }
-      setSchedule(ns);
-    }
-    setRows(prev => prev.map(r => r.id === rowId ? { ...r, empId: newEmpId } : r));
-  };
-
-  // Which employees are already assigned in other rows
-  const assignedEmpIds = rows.map(r => r.empId).filter(Boolean);
-
   const copyPrevWeek = () => {
     const prevStart = addDays(weekStart, -7);
-    const prevRows = loadRows(prevStart);
-    if (prevRows.length === 0) { toast.show("No schedule found last week", "warning"); return; }
-    // Copy rows with new IDs
-    const newRows = prevRows.map(r => ({ id: uid(), empId: r.empId }));
-    setRows(newRows);
-    // Copy schedule data
     const ns = { ...schedule };
-    prevRows.forEach(r => {
-      if (!r.empId) return;
+    let found = false;
+    nonAdmin.forEach(emp => {
       for (let d = 0; d < 7; d++) {
-        const pk = prevStart + "_" + r.empId + "_" + d;
-        const nk = weekStart + "_" + r.empId + "_" + d;
-        if (schedule[pk]) ns[nk] = { ...schedule[pk] };
+        const pk = prevStart + "_" + emp.id + "_" + d;
+        const nk = weekStart + "_" + emp.id + "_" + d;
+        if (schedule[pk]) { ns[nk] = { ...schedule[pk] }; found = true; }
       }
     });
+    if (!found) { toast.show("No schedule found last week", "warning"); return; }
     setSchedule(ns);
     toast.show("Copied last week's schedule");
   };
 
   const clearWeek = () => {
     const ns = { ...schedule };
-    rows.forEach(r => {
-      if (!r.empId) return;
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + r.empId + "_" + d]; }
+    nonAdmin.forEach(emp => {
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + emp.id + "_" + d]; }
     });
     setSchedule(ns);
-    setRows([]);
     toast.show("Week cleared", "warning");
   };
 
   const getWeekHours = (empId) => {
-    if (!empId) return 0;
     let total = 0;
     for (let d = 0; d < 7; d++) {
       const c = getCell(empId, d);
@@ -751,6 +689,9 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
     }
     return total;
   };
+
+  const roleBg = { A: "rgba(124,58,237,.15)", B: "rgba(37,99,235,.12)", C: "rgba(217,119,6,.12)" };
+  const roleColor = { A: "var(--purple)", B: "var(--blue)", C: "var(--amber)" };
 
   return (
     <div>
@@ -765,72 +706,60 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
-              <th style={{background:"#2c3e7f",color:"#fff",minWidth:160,textAlign:"left",paddingLeft:16}}>Employee</th>
+              <th style={{background:"#2c3e7f",color:"#fff",minWidth:120,textAlign:"left",paddingLeft:16}}>Employee</th>
               {DAYS.map((d, i) => (
-                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:110}}>
+                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:120}}>
                   {DAY_FULL[i]}<br/>
                   <span style={{fontWeight:400,fontSize:10,opacity:.8}}>({formatDate(addDays(weekStart, i))})</span>
                 </th>
               ))}
               <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:10,minWidth:50}}>TOTAL</th>
-              <th style={{background:"#2c3e7f",color:"#fff",width:40}}></th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={10} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
-                No shifts added yet. Click &ldquo;+ Add Employee&rdquo; below to build the schedule.
+            {nonAdmin.length === 0 && (
+              <tr><td colSpan={9} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
+                No employees yet. Add staff in the Staff tab first.
               </td></tr>
             )}
-            {rows.map(row => {
-              const emp = nonAdmin.find(e => e.id === row.empId);
-              const weekHrs = getWeekHours(row.empId);
+            {nonAdmin.map(emp => {
+              const weekHrs = getWeekHours(emp.id);
               return (
-                <tr key={row.id}>
-                  <td style={{paddingLeft:12,verticalAlign:"middle"}}>
-                    <select
-                      value={row.empId}
-                      onChange={e => changeRowEmployee(row.id, row.empId, e.target.value)}
-                      style={{width:"100%",fontSize:13,padding:"8px 6px",fontWeight:600,borderRadius:8,border:"1px solid var(--border2)",background:"var(--bg2)"}}
-                    >
-                      <option value="">-- Select Employee --</option>
-                      {nonAdmin.map(e => (
-                        <option key={e.id} value={e.id} disabled={assignedEmpIds.includes(e.id) && e.id !== row.empId}>
-                          {e.name} (Role {e.role})
-                        </option>
-                      ))}
-                    </select>
+                <tr key={emp.id}>
+                  <td style={{paddingLeft:12,verticalAlign:"middle",fontWeight:600,fontSize:13}}>
+                    {emp.name}
                   </td>
                   {DAYS.map((_, di) => {
-                    const c = getCell(row.empId, di);
+                    const c = getCell(emp.id, di);
                     const hrs = c.on ? calcShiftHours(c.start, c.end) : 0;
                     return (
                       <td key={di} style={{padding:"6px 4px",verticalAlign:"top",background:c.on?"rgba(22,163,74,.03)":"transparent"}}>
                         <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"center",minHeight:44}}>
-                          {row.empId ? (
+                          <div
+                            onClick={() => setCell(emp.id, di, { on: !c.on })}
+                            style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
+                              background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
+                              border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
+                          >
+                            {c.on ? "ON" : "OFF"}
+                          </div>
+                          {c.on && (
                             <>
-                              <div
-                                onClick={() => setCell(row.empId, di, { on: !c.on })}
-                                style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
-                                  background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
-                                  border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
-                              >
-                                {c.on ? "ON" : "OFF"}
-                              </div>
-                              {c.on && (
-                                <>
-                                  <select value={c.start} onChange={e => setCell(row.empId, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                                  </select>
-                                  <select value={c.end} onChange={e => setCell(row.empId, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                                  </select>
-                                  <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
-                                </>
-                              )}
+                              <select value={c.start} onChange={e => setCell(emp.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                              </select>
+                              <select value={c.end} onChange={e => setCell(emp.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                              </select>
+                              <select value={c.shiftRole||""} onChange={e => setCell(emp.id, di, {shiftRole: e.target.value})}
+                                style={{width:"100%",fontSize:10,padding:"2px 2px",fontWeight:600,
+                                  color:roleColor[c.shiftRole]||"var(--muted)",
+                                  background:roleBg[c.shiftRole]||"var(--bg2)",
+                                  borderRadius:5}}>
+                                {ROLE_OPTIONS.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
+                              </select>
+                              <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
                             </>
-                          ) : (
-                            <span style={{fontSize:10,color:"var(--muted)",fontStyle:"italic"}}>—</span>
                           )}
                         </div>
                       </td>
@@ -839,18 +768,14 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
                   <td style={{textAlign:"center",verticalAlign:"middle",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:weekHrs>0?"var(--green)":"var(--muted)"}}>
                     {weekHrs}h
                   </td>
-                  <td style={{textAlign:"center",verticalAlign:"middle"}}>
-                    <button onClick={() => removeRow(row.id, row.empId)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4}} title="Remove row">&#10005;</button>
-                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div style={{display:"flex",gap:10,marginTop:12}}>
-        <button className="btn primary small" onClick={addRow} style={{padding:"10px 20px",fontSize:13}}>+ Add Employee</button>
-        {rows.length > 0 && <span style={{fontSize:12,color:"var(--muted2)",alignSelf:"center"}}>{rows.filter(r=>r.empId).length} employee{rows.filter(r=>r.empId).length!==1?"s":""} scheduled</span>}
+      <div style={{marginTop:12}}>
+        <span style={{fontSize:12,color:"var(--muted2)"}}>{nonAdmin.length} employee{nonAdmin.length!==1?"s":""} on roster</span>
       </div>
       <div className="sched-rule">
         <span style={{fontSize:16}}>&#9888;</span>
@@ -1017,7 +942,7 @@ function AdminTasks({ employees, tasks, setTasks, toast }) {
             <div className="form-group"><label>Assign To</label>
               <select value={form.assignTo} onChange={e => setForm(f=>({...f,assignTo:e.target.value}))}>
                 <option value="all">All Staff</option><option value="A">Role A</option><option value="B">Role B</option><option value="C">Role C</option>
-                {nonAdmin.map(e => <option key={e.id} value={e.id}>{e.name} (Role {e.role})</option>)}
+                {nonAdmin.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
@@ -1893,7 +1818,7 @@ export default function App() {
             <div className="live-time">{liveTime}</div>
             <div className="user-chip" onClick={() => setUser(null)}>
               <div className="avatar" style={{background:roleBg[user.role],color:roleColor[user.role]}}>{user.name.charAt(0)}</div>
-              <div className="user-info"><div className="user-name">{user.name}</div><div className="user-role">{isAdmin?"Administrator":"Role "+user.role}</div></div>
+              <div className="user-info"><div className="user-name">{user.name}</div><div className="user-role">{isAdmin?"Administrator":"Staff"}</div></div>
             </div>
           </div>
         </div>
