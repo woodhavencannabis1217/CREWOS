@@ -645,49 +645,71 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
     { val: "C", label: "Role C" },
   ];
 
-  // schedule keys: weekStart_empId_dayIdx = { on, start, end, shiftRole }
-  const getCell = (empId, dayIdx) => {
-    const key = weekStart + "_" + empId + "_" + dayIdx;
-    return schedule[key] || { on: false, start: "09:00", end: "17:00", shiftRole: "" };
+  // Shift rows stored per week
+  const loadShifts = (ws) => {
+    try { return JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || []; } catch { return []; }
   };
-  const setCell = (empId, dayIdx, updates) => {
-    const key = weekStart + "_" + empId + "_" + dayIdx;
-    const cur = getCell(empId, dayIdx);
+  const [shifts, setShifts] = useState(() => loadShifts(weekStart));
+  const saveShifts = (ws, s) => { localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(s)); };
+
+  const prevWeekRef = useRef(weekStart);
+  useEffect(() => {
+    if (prevWeekRef.current !== weekStart) {
+      setShifts(loadShifts(weekStart));
+      prevWeekRef.current = weekStart;
+    }
+  }, [weekStart]);
+  useEffect(() => { saveShifts(weekStart, shifts); }, [shifts, weekStart]);
+
+  // schedule keys: weekStart_shiftId_dayIdx = { empId, start, end, shiftRole }
+  const getCell = (shiftId, dayIdx) => {
+    const key = weekStart + "_" + shiftId + "_" + dayIdx;
+    return schedule[key] || { empId: "", start: "09:00", end: "17:00", shiftRole: "" };
+  };
+  const setCell = (shiftId, dayIdx, updates) => {
+    const key = weekStart + "_" + shiftId + "_" + dayIdx;
+    const cur = getCell(shiftId, dayIdx);
     setSchedule(prev => ({ ...prev, [key]: { ...cur, ...updates } }));
+  };
+
+  const addShift = () => {
+    setShifts(prev => [...prev, { id: uid() }]);
+  };
+
+  const removeShift = (shiftId) => {
+    const ns = { ...schedule };
+    for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + shiftId + "_" + d]; }
+    setSchedule(ns);
+    setShifts(prev => prev.filter(s => s.id !== shiftId));
   };
 
   const copyPrevWeek = () => {
     const prevStart = addDays(weekStart, -7);
+    const prevShifts = loadShifts(prevStart);
+    if (prevShifts.length === 0) { toast.show("No schedule found last week", "warning"); return; }
+    const newShifts = prevShifts.map(s => ({ id: uid(), origId: s.id }));
     const ns = { ...schedule };
-    let found = false;
-    nonAdmin.forEach(emp => {
+    newShifts.forEach((ns2, idx) => {
+      const origId = prevShifts[idx].id;
       for (let d = 0; d < 7; d++) {
-        const pk = prevStart + "_" + emp.id + "_" + d;
-        const nk = weekStart + "_" + emp.id + "_" + d;
-        if (schedule[pk]) { ns[nk] = { ...schedule[pk] }; found = true; }
+        const pk = prevStart + "_" + origId + "_" + d;
+        const nk = weekStart + "_" + ns2.id + "_" + d;
+        if (schedule[pk]) ns[nk] = { ...schedule[pk] };
       }
     });
-    if (!found) { toast.show("No schedule found last week", "warning"); return; }
+    setShifts(newShifts.map(s => ({ id: s.id })));
     setSchedule(ns);
     toast.show("Copied last week's schedule");
   };
 
   const clearWeek = () => {
     const ns = { ...schedule };
-    nonAdmin.forEach(emp => {
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + emp.id + "_" + d]; }
+    shifts.forEach(s => {
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + s.id + "_" + d]; }
     });
     setSchedule(ns);
+    setShifts([]);
     toast.show("Week cleared", "warning");
-  };
-
-  const getWeekHours = (empId) => {
-    let total = 0;
-    for (let d = 0; d < 7; d++) {
-      const c = getCell(empId, d);
-      if (c.on) total += calcShiftHours(c.start, c.end);
-    }
-    return total;
   };
 
   const roleBg = { A: "rgba(124,58,237,.15)", B: "rgba(37,99,235,.12)", C: "rgba(217,119,6,.12)" };
@@ -706,76 +728,76 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
-              <th style={{background:"#2c3e7f",color:"#fff",minWidth:120,textAlign:"left",paddingLeft:16}}>Employee</th>
               {DAYS.map((d, i) => (
-                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:120}}>
+                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:140}}>
                   {DAY_FULL[i]}<br/>
                   <span style={{fontWeight:400,fontSize:10,opacity:.8}}>({formatDate(addDays(weekStart, i))})</span>
                 </th>
               ))}
-              <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:10,minWidth:50}}>TOTAL</th>
+              <th style={{background:"#2c3e7f",color:"#fff",width:36}}></th>
             </tr>
           </thead>
           <tbody>
-            {nonAdmin.length === 0 && (
-              <tr><td colSpan={9} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
-                No employees yet. Add staff in the Staff tab first.
+            {shifts.length === 0 && (
+              <tr><td colSpan={8} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
+                No shifts yet. Click &ldquo;+ Add Shift&rdquo; below to build the schedule.
               </td></tr>
             )}
-            {nonAdmin.map(emp => {
-              const weekHrs = getWeekHours(emp.id);
-              return (
-                <tr key={emp.id}>
-                  <td style={{paddingLeft:12,verticalAlign:"middle",fontWeight:600,fontSize:13}}>
-                    {emp.name}
-                  </td>
-                  {DAYS.map((_, di) => {
-                    const c = getCell(emp.id, di);
-                    const hrs = c.on ? calcShiftHours(c.start, c.end) : 0;
-                    return (
-                      <td key={di} style={{padding:"6px 4px",verticalAlign:"top",background:c.on?"rgba(22,163,74,.03)":"transparent"}}>
-                        <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"center",minHeight:44}}>
-                          <div
-                            onClick={() => setCell(emp.id, di, { on: !c.on })}
-                            style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
-                              background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
-                              border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
-                          >
-                            {c.on ? "ON" : "OFF"}
-                          </div>
-                          {c.on && (
-                            <>
-                              <select value={c.start} onChange={e => setCell(emp.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                              </select>
-                              <select value={c.end} onChange={e => setCell(emp.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                              </select>
-                              <select value={c.shiftRole||""} onChange={e => setCell(emp.id, di, {shiftRole: e.target.value})}
-                                style={{width:"100%",fontSize:10,padding:"2px 2px",fontWeight:600,
-                                  color:roleColor[c.shiftRole]||"var(--muted)",
-                                  background:roleBg[c.shiftRole]||"var(--bg2)",
-                                  borderRadius:5}}>
-                                {ROLE_OPTIONS.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
-                              </select>
-                              <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    );
-                  })}
-                  <td style={{textAlign:"center",verticalAlign:"middle",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:weekHrs>0?"var(--green)":"var(--muted)"}}>
-                    {weekHrs}h
-                  </td>
-                </tr>
-              );
-            })}
+            {shifts.map((shift, shiftIdx) => (
+              <tr key={shift.id} style={{borderBottom:"2px solid var(--border)"}}>
+                {DAYS.map((_, di) => {
+                  const c = getCell(shift.id, di);
+                  const hasEmp = !!c.empId;
+                  const hrs = hasEmp ? calcShiftHours(c.start, c.end) : 0;
+                  const emp = nonAdmin.find(e => e.id === c.empId);
+                  return (
+                    <td key={di} style={{padding:"8px 5px",verticalAlign:"top",background:hasEmp?"rgba(22,163,74,.03)":"transparent"}}>
+                      <div style={{display:"flex",flexDirection:"column",gap:4,minHeight:50}}>
+                        <select
+                          value={c.empId}
+                          onChange={e => setCell(shift.id, di, { empId: e.target.value })}
+                          style={{width:"100%",fontSize:11,padding:"5px 4px",fontWeight:600,borderRadius:6,
+                            border:"1px solid "+(hasEmp?"rgba(22,163,74,.3)":"var(--border2)"),
+                            background:hasEmp?"rgba(22,163,74,.06)":"var(--bg2)",
+                            color:hasEmp?"var(--green)":"var(--muted)"}}
+                        >
+                          <option value="">-- Off --</option>
+                          {nonAdmin.map(e => (
+                            <option key={e.id} value={e.id}>{e.name}</option>
+                          ))}
+                        </select>
+                        {hasEmp && (
+                          <>
+                            <select value={c.start} onChange={e => setCell(shift.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px"}}>
+                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                            </select>
+                            <select value={c.end} onChange={e => setCell(shift.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px"}}>
+                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                            </select>
+                            <select value={c.shiftRole||""} onChange={e => setCell(shift.id, di, {shiftRole: e.target.value})}
+                              style={{width:"100%",fontSize:10,padding:"3px 2px",fontWeight:600,
+                                color:roleColor[c.shiftRole]||"var(--muted)",
+                                background:roleBg[c.shiftRole]||"var(--bg2)",
+                                borderRadius:5}}>
+                              {ROLE_OPTIONS.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
+                            </select>
+                            <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)",textAlign:"center"}}>{hrs}h</span>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+                <td style={{textAlign:"center",verticalAlign:"middle"}}>
+                  <button onClick={() => removeShift(shift.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:14,padding:4}} title="Remove shift">&#10005;</button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
       <div style={{marginTop:12}}>
-        <span style={{fontSize:12,color:"var(--muted2)"}}>{nonAdmin.length} employee{nonAdmin.length!==1?"s":""} on roster</span>
+        <button className="btn primary small" onClick={addShift} style={{padding:"10px 20px",fontSize:13}}>+ Add Shift</button>
       </div>
       <div className="sched-rule">
         <span style={{fontSize:16}}>&#9888;</span>
