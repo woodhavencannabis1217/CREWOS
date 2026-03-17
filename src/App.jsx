@@ -651,24 +651,79 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
+  // Dynamic rows: each row picks an employee via dropdown
+  // Stored per week in localStorage
+  const loadRows = (ws) => {
+    try { return JSON.parse(localStorage.getItem("crewos_sched_rows_" + ws)) || []; } catch { return []; }
+  };
+  const [rows, setRows] = useState(() => loadRows(weekStart));
+  const saveRows = (ws, r) => { localStorage.setItem("crewos_sched_rows_" + ws, JSON.stringify(r)); };
+
+  // When week changes, load that week's rows
+  const prevWeekRef = useRef(weekStart);
+  useEffect(() => {
+    if (prevWeekRef.current !== weekStart) {
+      setRows(loadRows(weekStart));
+      prevWeekRef.current = weekStart;
+    }
+  }, [weekStart]);
+  // Save rows whenever they change
+  useEffect(() => { saveRows(weekStart, rows); }, [rows, weekStart]);
+
   // schedule keys: weekStart_empId_dayIdx = { on, start, end }
   const getCell = (empId, dayIdx) => {
+    if (!empId) return { on: false, start: "09:00", end: "17:00" };
     const key = weekStart + "_" + empId + "_" + dayIdx;
     return schedule[key] || { on: false, start: "09:00", end: "17:00" };
   };
   const setCell = (empId, dayIdx, updates) => {
+    if (!empId) return;
     const key = weekStart + "_" + empId + "_" + dayIdx;
     const cur = getCell(empId, dayIdx);
     setSchedule(prev => ({ ...prev, [key]: { ...cur, ...updates } }));
   };
 
+  const addRow = () => {
+    setRows(prev => [...prev, { id: uid(), empId: "" }]);
+  };
+
+  const removeRow = (rowId, empId) => {
+    // Clear schedule data for this employee this week
+    if (empId) {
+      const ns = { ...schedule };
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + empId + "_" + d]; }
+      setSchedule(ns);
+    }
+    setRows(prev => prev.filter(r => r.id !== rowId));
+  };
+
+  const changeRowEmployee = (rowId, oldEmpId, newEmpId) => {
+    // If switching employee, clear old employee's schedule data
+    if (oldEmpId && oldEmpId !== newEmpId) {
+      const ns = { ...schedule };
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + oldEmpId + "_" + d]; }
+      setSchedule(ns);
+    }
+    setRows(prev => prev.map(r => r.id === rowId ? { ...r, empId: newEmpId } : r));
+  };
+
+  // Which employees are already assigned in other rows
+  const assignedEmpIds = rows.map(r => r.empId).filter(Boolean);
+
   const copyPrevWeek = () => {
     const prevStart = addDays(weekStart, -7);
+    const prevRows = loadRows(prevStart);
+    if (prevRows.length === 0) { toast.show("No schedule found last week", "warning"); return; }
+    // Copy rows with new IDs
+    const newRows = prevRows.map(r => ({ id: uid(), empId: r.empId }));
+    setRows(newRows);
+    // Copy schedule data
     const ns = { ...schedule };
-    nonAdmin.forEach(emp => {
+    prevRows.forEach(r => {
+      if (!r.empId) return;
       for (let d = 0; d < 7; d++) {
-        const pk = prevStart + "_" + emp.id + "_" + d;
-        const nk = weekStart + "_" + emp.id + "_" + d;
+        const pk = prevStart + "_" + r.empId + "_" + d;
+        const nk = weekStart + "_" + r.empId + "_" + d;
         if (schedule[pk]) ns[nk] = { ...schedule[pk] };
       }
     });
@@ -678,18 +733,17 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
 
   const clearWeek = () => {
     const ns = { ...schedule };
-    nonAdmin.forEach(emp => {
-      for (let d = 0; d < 7; d++) {
-        const k = weekStart + "_" + emp.id + "_" + d;
-        delete ns[k];
-      }
+    rows.forEach(r => {
+      if (!r.empId) return;
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + r.empId + "_" + d]; }
     });
     setSchedule(ns);
+    setRows([]);
     toast.show("Week cleared", "warning");
   };
 
-  // Totals per employee
   const getWeekHours = (empId) => {
+    if (!empId) return 0;
     let total = 0;
     for (let d = 0; d < 7; d++) {
       const c = getCell(empId, d);
@@ -711,7 +765,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
-              <th style={{background:"#2c3e7f",color:"#fff",minWidth:120,textAlign:"left",paddingLeft:16}}>Employee</th>
+              <th style={{background:"#2c3e7f",color:"#fff",minWidth:160,textAlign:"left",paddingLeft:16}}>Employee</th>
               {DAYS.map((d, i) => (
                 <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:110}}>
                   {DAY_FULL[i]}<br/>
@@ -719,41 +773,64 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
                 </th>
               ))}
               <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:10,minWidth:50}}>TOTAL</th>
+              <th style={{background:"#2c3e7f",color:"#fff",width:40}}></th>
             </tr>
           </thead>
           <tbody>
-            {nonAdmin.map(emp => {
-              const weekHrs = getWeekHours(emp.id);
+            {rows.length === 0 && (
+              <tr><td colSpan={10} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
+                No shifts added yet. Click &ldquo;+ Add Employee&rdquo; below to build the schedule.
+              </td></tr>
+            )}
+            {rows.map(row => {
+              const emp = nonAdmin.find(e => e.id === row.empId);
+              const weekHrs = getWeekHours(row.empId);
               return (
-                <tr key={emp.id}>
-                  <td style={{paddingLeft:16,verticalAlign:"middle"}}>
-                    <div style={{fontWeight:600,fontSize:13}}>{emp.name}</div>
-                    <div style={{fontSize:10,color:"var(--muted2)"}}>Role {emp.role}</div>
+                <tr key={row.id}>
+                  <td style={{paddingLeft:12,verticalAlign:"middle"}}>
+                    <select
+                      value={row.empId}
+                      onChange={e => changeRowEmployee(row.id, row.empId, e.target.value)}
+                      style={{width:"100%",fontSize:13,padding:"8px 6px",fontWeight:600,borderRadius:8,border:"1px solid var(--border2)",background:"var(--bg2)"}}
+                    >
+                      <option value="">-- Select Employee --</option>
+                      {nonAdmin.map(e => (
+                        <option key={e.id} value={e.id} disabled={assignedEmpIds.includes(e.id) && e.id !== row.empId}>
+                          {e.name} (Role {e.role})
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   {DAYS.map((_, di) => {
-                    const c = getCell(emp.id, di);
+                    const c = getCell(row.empId, di);
                     const hrs = c.on ? calcShiftHours(c.start, c.end) : 0;
                     return (
                       <td key={di} style={{padding:"6px 4px",verticalAlign:"top",background:c.on?"rgba(22,163,74,.03)":"transparent"}}>
                         <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"center",minHeight:44}}>
-                          <div
-                            onClick={() => setCell(emp.id, di, { on: !c.on })}
-                            style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
-                              background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
-                              border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
-                          >
-                            {c.on ? "ON" : "OFF"}
-                          </div>
-                          {c.on && (
+                          {row.empId ? (
                             <>
-                              <select value={c.start} onChange={e => setCell(emp.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                              </select>
-                              <select value={c.end} onChange={e => setCell(emp.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                              </select>
-                              <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
+                              <div
+                                onClick={() => setCell(row.empId, di, { on: !c.on })}
+                                style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
+                                  background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
+                                  border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
+                              >
+                                {c.on ? "ON" : "OFF"}
+                              </div>
+                              {c.on && (
+                                <>
+                                  <select value={c.start} onChange={e => setCell(row.empId, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                                  </select>
+                                  <select value={c.end} onChange={e => setCell(row.empId, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                                  </select>
+                                  <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
+                                </>
+                              )}
                             </>
+                          ) : (
+                            <span style={{fontSize:10,color:"var(--muted)",fontStyle:"italic"}}>—</span>
                           )}
                         </div>
                       </td>
@@ -762,11 +839,18 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
                   <td style={{textAlign:"center",verticalAlign:"middle",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:weekHrs>0?"var(--green)":"var(--muted)"}}>
                     {weekHrs}h
                   </td>
+                  <td style={{textAlign:"center",verticalAlign:"middle"}}>
+                    <button onClick={() => removeRow(row.id, row.empId)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4}} title="Remove row">&#10005;</button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </div>
+      <div style={{display:"flex",gap:10,marginTop:12}}>
+        <button className="btn primary small" onClick={addRow} style={{padding:"10px 20px",fontSize:13}}>+ Add Employee</button>
+        {rows.length > 0 && <span style={{fontSize:12,color:"var(--muted2)",alignSelf:"center"}}>{rows.filter(r=>r.empId).length} employee{rows.filter(r=>r.empId).length!==1?"s":""} scheduled</span>}
       </div>
       <div className="sched-rule">
         <span style={{fontSize:16}}>&#9888;</span>
@@ -954,17 +1038,119 @@ function AdminTasks({ employees, tasks, setTasks, toast }) {
 }
 
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
+// ─── SIGNATURE PAD COMPONENT ─────────────────────────────────────────────────
+function SignaturePad({ value, onChange }) {
+  const canvasRef = useRef(null);
+  const [drawing, setDrawing] = useState(false);
+  const [hasDrawn, setHasDrawn] = useState(!!value);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = 150;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // If there's an existing signature, redraw it
+    if (value && value.startsWith("data:")) {
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0);
+      img.src = value;
+    }
+  }, []);
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+  };
+
+  const startDraw = (e) => {
+    e.preventDefault();
+    setDrawing(true);
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+  };
+
+  const draw = (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    setHasDrawn(true);
+  };
+
+  const endDraw = (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    setDrawing(false);
+    // Save as data URL
+    const dataUrl = canvasRef.current.toDataURL("image/png");
+    onChange(dataUrl);
+  };
+
+  const clear = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    setHasDrawn(false);
+    onChange("");
+  };
+
+  return (
+    <div>
+      <div style={{position:"relative",border:"1px dashed var(--border2)",borderRadius:8,overflow:"hidden",background:"#fff",touchAction:"none"}}>
+        <canvas
+          ref={canvasRef}
+          style={{display:"block",width:"100%",height:150,cursor:"crosshair"}}
+          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+        />
+        {!hasDrawn && (
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none",color:"var(--muted)",fontSize:13}}>
+            Sign here with your finger or mouse
+          </div>
+        )}
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:6}}>
+        <button type="button" className="btn small" onClick={clear} style={{fontSize:11}}>Clear Signature</button>
+      </div>
+    </div>
+  );
+}
+
 // Default vendor form fields (admin can customize, saved in localStorage)
 const DEFAULT_VENDOR_FIELDS = [
   { id:1, name:"Company / Brand name", type:"Required - Text" },
   { id:2, name:"Delivery date", type:"Required - Date" },
   { id:3, name:"Driver signature", type:"Required - Signature" },
-  { id:4, name:"Invoice / manifest upload", type:"Required - File" },
 ];
 
 // ─── VENDOR FORM (standalone page vendors see after scanning QR) ─────────────
 function VendorFormPage() {
-  const [fields] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_fields")) || DEFAULT_VENDOR_FIELDS; } catch { return DEFAULT_VENDOR_FIELDS; } });
+  const [fields] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("crewos_vendor_fields"));
+      if (!saved) return DEFAULT_VENDOR_FIELDS;
+      // Migrate: if saved fields still have old "Invoice / manifest upload" or old signature type, reset to defaults
+      const hasInvoice = saved.some(f => f.name && f.name.toLowerCase().includes("invoice"));
+      const hasBadSig = saved.some(f => f.name && f.name.toLowerCase().includes("signature") && !f.type.includes("Signature"));
+      if (hasInvoice || hasBadSig) { localStorage.setItem("crewos_vendor_fields", JSON.stringify(DEFAULT_VENDOR_FIELDS)); return DEFAULT_VENDOR_FIELDS; }
+      return saved;
+    } catch { return DEFAULT_VENDOR_FIELDS; }
+  });
   const [form, setForm] = useState({});
   const [submitted, setSubmitted] = useState(false);
 
@@ -1023,12 +1209,7 @@ function VendorFormPage() {
                 {f.type.includes("Date") ? (
                   <input type="date" value={form[f.name] || new Date().toISOString().split("T")[0]} onChange={e => setForm(v => ({...v, [f.name]: e.target.value}))} />
                 ) : f.type.includes("Signature") ? (
-                  <div
-                    style={{background:"var(--bg4)",border:"1px dashed var(--border2)",borderRadius:8,padding:24,textAlign:"center",fontSize:13,color:"var(--muted2)",cursor:"pointer",transition:"all .15s"}}
-                    onClick={() => setForm(v => ({...v, [f.name]: "Signed"}))}
-                  >
-                    {form[f.name] ? <span style={{color:"var(--green)",fontSize:16,fontWeight:600}}>&#10003; Signed</span> : "Tap here to sign"}
-                  </div>
+                  <SignaturePad value={form[f.name] || ""} onChange={val => setForm(v => ({...v, [f.name]: val}))} />
                 ) : (
                   <input type="text" value={form[f.name] || ""} onChange={e => setForm(v => ({...v, [f.name]: e.target.value}))} placeholder={"Enter " + f.name.toLowerCase()} />
                 )}
@@ -1047,7 +1228,16 @@ function VendorFormPage() {
 
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
 function AdminVendor({ notifications, setNotifications, toast }) {
-  const [fields, setFields] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_fields")) || DEFAULT_VENDOR_FIELDS; } catch { return DEFAULT_VENDOR_FIELDS; } });
+  const [fields, setFields] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("crewos_vendor_fields"));
+      if (!saved) return DEFAULT_VENDOR_FIELDS;
+      const hasInvoice = saved.some(f => f.name && f.name.toLowerCase().includes("invoice"));
+      const hasBadSig = saved.some(f => f.name && f.name.toLowerCase().includes("signature") && !f.type.includes("Signature"));
+      if (hasInvoice || hasBadSig) { localStorage.setItem("crewos_vendor_fields", JSON.stringify(DEFAULT_VENDOR_FIELDS)); return DEFAULT_VENDOR_FIELDS; }
+      return saved;
+    } catch { return DEFAULT_VENDOR_FIELDS; }
+  });
   const [newField, setNewField] = useState("");
   const [deliveryLog, setDeliveryLog] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_deliveries"))||[]; } catch { return []; } });
 
@@ -1493,8 +1683,6 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  if (hash === "#/vendor-form") return <VendorFormPage />;
-
   const [user, setUser] = useState(null);
   const [adminTab, setAdminTab] = useState("schedule");
   const [empTab, setEmpTab] = useState("hours");
@@ -1565,6 +1753,9 @@ export default function App() {
   const [geoBlocked, setGeoBlocked] = useState(false);
   const [geoBlockMsg, setGeoBlockMsg] = useState("");
   const [geoChecking, setGeoChecking] = useState(false);
+
+  // Hash routing: if #/vendor-form, show the vendor form page (must be after all hooks)
+  if (hash === "#/vendor-form") return <VendorFormPage />;
 
   const doClockIn = () => {
     // Clock in immediately
