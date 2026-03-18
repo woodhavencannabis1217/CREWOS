@@ -361,12 +361,7 @@ function PinLogin({ onLogin, employees }) {
           <div className="pkey del" style={{visibility:"hidden"}}></div>
         </div>
         <div className="pin-error">{error}</div>
-        <div className="demo-hint">
-          <strong>Demo PINs</strong><br/>
-          Admin: 0000 &nbsp;|&nbsp; Adam (A): 1111<br/>
-          Eva (B): 2222 &nbsp;|&nbsp; Marco (C): 3333<br/>
-          Sofia (B): 4444
-        </div>
+        {/* PINs are private - each employee receives their PIN from admin */}
       </div>
     </div>
   );
@@ -514,17 +509,17 @@ function HandoffBanner({ notes, onDismiss }) {
 function AdminEmployees({ employees, setEmployees, toast }) {
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: "", pin: "", rate: 15 });
+  const [form, setForm] = useState({ name: "", pin: "", role: "A", rate: 15 });
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
   const openNew = () => {
-    setForm({ name: "", pin: "", rate: 15 });
+    setForm({ name: "", pin: "", role: "A", rate: 15 });
     setEditId(null);
     setShowModal(true);
   };
 
   const openEdit = (emp) => {
-    setForm({ name: emp.name, pin: emp.pin, rate: emp.rate || 15 });
+    setForm({ name: emp.name, pin: emp.pin, role: emp.role, rate: emp.rate || 15 });
     setEditId(emp.id);
     setShowModal(true);
   };
@@ -555,6 +550,9 @@ function AdminEmployees({ employees, setEmployees, toast }) {
     toast.show("Removed " + emp.name, "warning");
   };
 
+  const roleBg = { A: "rgba(124,58,237,.1)", B: "rgba(37,99,235,.08)", C: "rgba(217,119,6,.08)" };
+  const roleColor = { A: "var(--purple)", B: "var(--blue)", C: "var(--amber)" };
+
   return (
     <div>
       <div className="row" style={{marginBottom:18}}>
@@ -564,12 +562,12 @@ function AdminEmployees({ employees, setEmployees, toast }) {
       </div>
       {nonAdmin.map(emp => (
         <div className="emp-card" key={emp.id}>
-          <div className="emp-avatar" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>
+          <div className="emp-avatar" style={{background:roleBg[emp.role]||"var(--bg4)",color:roleColor[emp.role]||"var(--text)"}}>
             {emp.name.charAt(0)}
           </div>
           <div className="emp-info">
             <div className="emp-name">{emp.name}</div>
-            <div className="emp-detail">PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr</div>
+            <div className="emp-detail">Role {emp.role} &nbsp;·&nbsp; PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr</div>
           </div>
           <div className="emp-actions">
             <button className="btn small" onClick={() => openEdit(emp)}>Edit</button>
@@ -589,9 +587,19 @@ function AdminEmployees({ employees, setEmployees, toast }) {
               <label>4-Digit PIN</label>
               <input type="text" maxLength={4} value={form.pin} onChange={e => setForm(f => ({...f, pin: e.target.value.replace(/\D/g,"").slice(0,4)}))} placeholder="e.g. 1234" style={{fontFamily:"var(--mono)",letterSpacing:"4px",fontSize:18,textAlign:"center"}} />
             </div>
-            <div className="form-group">
-              <label>Hourly Rate ($)</label>
-              <input type="number" min={0} step={0.5} value={form.rate} onChange={e => setForm(f => ({...f, rate: parseFloat(e.target.value)||0}))} />
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div className="form-group">
+                <label>Role</label>
+                <select value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))}>
+                  <option value="A">Role A</option>
+                  <option value="B">Role B</option>
+                  <option value="C">Role C</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Hourly Rate ($)</label>
+                <input type="number" min={0} step={0.5} value={form.rate} onChange={e => setForm(f => ({...f, rate: parseFloat(e.target.value)||0}))} />
+              </div>
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => setShowModal(false)}>Cancel</button>
@@ -638,82 +646,106 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
-  const ROLE_OPTIONS = [
-    { val: "", label: "No Role" },
-    { val: "A", label: "Role A" },
-    { val: "B", label: "Role B" },
-    { val: "C", label: "Role C" },
-  ];
-
-  // Shift rows stored per week
-  const loadShifts = (ws) => {
-    try { return JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || []; } catch { return []; }
+  // Dynamic rows: each row picks an employee via dropdown
+  // Stored per week in localStorage
+  const loadRows = (ws) => {
+    try { return JSON.parse(localStorage.getItem("crewos_sched_rows_" + ws)) || []; } catch { return []; }
   };
-  const [shifts, setShifts] = useState(() => loadShifts(weekStart));
-  const saveShifts = (ws, s) => { localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(s)); };
+  const [rows, setRows] = useState(() => loadRows(weekStart));
+  const saveRows = (ws, r) => { localStorage.setItem("crewos_sched_rows_" + ws, JSON.stringify(r)); };
 
+  // When week changes, load that week's rows
   const prevWeekRef = useRef(weekStart);
   useEffect(() => {
     if (prevWeekRef.current !== weekStart) {
-      setShifts(loadShifts(weekStart));
+      setRows(loadRows(weekStart));
       prevWeekRef.current = weekStart;
     }
   }, [weekStart]);
-  useEffect(() => { saveShifts(weekStart, shifts); }, [shifts, weekStart]);
+  // Save rows whenever they change
+  useEffect(() => { saveRows(weekStart, rows); }, [rows, weekStart]);
 
-  // schedule keys: weekStart_shiftId_dayIdx = { empId, start, end, shiftRole }
-  const getCell = (shiftId, dayIdx) => {
-    const key = weekStart + "_" + shiftId + "_" + dayIdx;
-    return schedule[key] || { empId: "", start: "09:00", end: "17:00", shiftRole: "" };
+  // schedule keys: weekStart_empId_dayIdx = { on, start, end }
+  const getCell = (empId, dayIdx) => {
+    if (!empId) return { on: false, start: "09:00", end: "17:00" };
+    const key = weekStart + "_" + empId + "_" + dayIdx;
+    return schedule[key] || { on: false, start: "09:00", end: "17:00" };
   };
-  const setCell = (shiftId, dayIdx, updates) => {
-    const key = weekStart + "_" + shiftId + "_" + dayIdx;
-    const cur = getCell(shiftId, dayIdx);
+  const setCell = (empId, dayIdx, updates) => {
+    if (!empId) return;
+    const key = weekStart + "_" + empId + "_" + dayIdx;
+    const cur = getCell(empId, dayIdx);
     setSchedule(prev => ({ ...prev, [key]: { ...cur, ...updates } }));
   };
 
-  const addShift = () => {
-    setShifts(prev => [...prev, { id: uid() }]);
+  const addRow = () => {
+    setRows(prev => [...prev, { id: uid(), empId: "" }]);
   };
 
-  const removeShift = (shiftId) => {
-    const ns = { ...schedule };
-    for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + shiftId + "_" + d]; }
-    setSchedule(ns);
-    setShifts(prev => prev.filter(s => s.id !== shiftId));
+  const removeRow = (rowId, empId) => {
+    // Clear schedule data for this employee this week
+    if (empId) {
+      const ns = { ...schedule };
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + empId + "_" + d]; }
+      setSchedule(ns);
+    }
+    setRows(prev => prev.filter(r => r.id !== rowId));
   };
+
+  const changeRowEmployee = (rowId, oldEmpId, newEmpId) => {
+    // If switching employee, clear old employee's schedule data
+    if (oldEmpId && oldEmpId !== newEmpId) {
+      const ns = { ...schedule };
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + oldEmpId + "_" + d]; }
+      setSchedule(ns);
+    }
+    setRows(prev => prev.map(r => r.id === rowId ? { ...r, empId: newEmpId, deliveryRole: "" } : r));
+  };
+
+  // Which employees are already assigned in other rows
+  const assignedEmpIds = rows.map(r => r.empId).filter(Boolean);
 
   const copyPrevWeek = () => {
     const prevStart = addDays(weekStart, -7);
-    const prevShifts = loadShifts(prevStart);
-    if (prevShifts.length === 0) { toast.show("No schedule found last week", "warning"); return; }
-    const newShifts = prevShifts.map(s => ({ id: uid(), origId: s.id }));
+    const prevRows = loadRows(prevStart);
+    if (prevRows.length === 0) { toast.show("No schedule found last week", "warning"); return; }
+    // Copy rows with new IDs
+    const newRows = prevRows.map(r => ({ id: uid(), empId: r.empId, deliveryRole: r.deliveryRole || "" }));
+    setRows(newRows);
+    // Copy schedule data
     const ns = { ...schedule };
-    newShifts.forEach((ns2, idx) => {
-      const origId = prevShifts[idx].id;
+    prevRows.forEach(r => {
+      if (!r.empId) return;
       for (let d = 0; d < 7; d++) {
-        const pk = prevStart + "_" + origId + "_" + d;
-        const nk = weekStart + "_" + ns2.id + "_" + d;
+        const pk = prevStart + "_" + r.empId + "_" + d;
+        const nk = weekStart + "_" + r.empId + "_" + d;
         if (schedule[pk]) ns[nk] = { ...schedule[pk] };
       }
     });
-    setShifts(newShifts.map(s => ({ id: s.id })));
     setSchedule(ns);
     toast.show("Copied last week's schedule");
   };
 
   const clearWeek = () => {
     const ns = { ...schedule };
-    shifts.forEach(s => {
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + s.id + "_" + d]; }
+    rows.forEach(r => {
+      if (!r.empId) return;
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + r.empId + "_" + d]; }
     });
     setSchedule(ns);
-    setShifts([]);
+    setRows([]);
     toast.show("Week cleared", "warning");
   };
 
-  const roleBg = { A: "rgba(124,58,237,.15)", B: "rgba(37,99,235,.12)", C: "rgba(217,119,6,.12)" };
-  const roleColor = { A: "var(--purple)", B: "var(--blue)", C: "var(--amber)" };
+  const getWeekHours = (empId) => {
+    if (!empId) return 0;
+    let total = 0;
+    for (let d = 0; d < 7; d++) {
+      const c = getCell(empId, d);
+      if (c.on) total += calcShiftHours(c.start, c.end);
+    }
+    return total;
+  };
 
   return (
     <div>
@@ -728,76 +760,106 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
+              <th style={{background:"#2c3e7f",color:"#fff",minWidth:160,textAlign:"left",paddingLeft:16}}>Employee</th>
               {DAYS.map((d, i) => (
-                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:140}}>
+                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:110}}>
                   {DAY_FULL[i]}<br/>
                   <span style={{fontWeight:400,fontSize:10,opacity:.8}}>({formatDate(addDays(weekStart, i))})</span>
                 </th>
               ))}
-              <th style={{background:"#2c3e7f",color:"#fff",width:36}}></th>
+              <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:10,minWidth:50}}>TOTAL</th>
+              <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:9,minWidth:80}}>DELIVERY<br/>ROLE</th>
+              <th style={{background:"#2c3e7f",color:"#fff",width:40}}></th>
             </tr>
           </thead>
           <tbody>
-            {shifts.length === 0 && (
-              <tr><td colSpan={8} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
-                No shifts yet. Click &ldquo;+ Add Shift&rdquo; below to build the schedule.
+            {rows.length === 0 && (
+              <tr><td colSpan={11} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
+                No shifts added yet. Click &ldquo;+ Add Employee&rdquo; below to build the schedule.
               </td></tr>
             )}
-            {shifts.map((shift, shiftIdx) => (
-              <tr key={shift.id} style={{borderBottom:"2px solid var(--border)"}}>
-                {DAYS.map((_, di) => {
-                  const c = getCell(shift.id, di);
-                  const hasEmp = !!c.empId;
-                  const hrs = hasEmp ? calcShiftHours(c.start, c.end) : 0;
-                  const emp = nonAdmin.find(e => e.id === c.empId);
-                  return (
-                    <td key={di} style={{padding:"8px 5px",verticalAlign:"top",background:hasEmp?"rgba(22,163,74,.03)":"transparent"}}>
-                      <div style={{display:"flex",flexDirection:"column",gap:4,minHeight:50}}>
-                        <select
-                          value={c.empId}
-                          onChange={e => setCell(shift.id, di, { empId: e.target.value })}
-                          style={{width:"100%",fontSize:11,padding:"5px 4px",fontWeight:600,borderRadius:6,
-                            border:"1px solid "+(hasEmp?"rgba(22,163,74,.3)":"var(--border2)"),
-                            background:hasEmp?"rgba(22,163,74,.06)":"var(--bg2)",
-                            color:hasEmp?"var(--green)":"var(--muted)"}}
-                        >
-                          <option value="">-- Off --</option>
-                          {nonAdmin.map(e => (
-                            <option key={e.id} value={e.id}>{e.name}</option>
-                          ))}
-                        </select>
-                        {hasEmp && (
-                          <>
-                            <select value={c.start} onChange={e => setCell(shift.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px"}}>
-                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                            </select>
-                            <select value={c.end} onChange={e => setCell(shift.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px"}}>
-                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                            </select>
-                            <select value={c.shiftRole||""} onChange={e => setCell(shift.id, di, {shiftRole: e.target.value})}
-                              style={{width:"100%",fontSize:10,padding:"3px 2px",fontWeight:600,
-                                color:roleColor[c.shiftRole]||"var(--muted)",
-                                background:roleBg[c.shiftRole]||"var(--bg2)",
-                                borderRadius:5}}>
-                              {ROLE_OPTIONS.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
-                            </select>
-                            <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)",textAlign:"center"}}>{hrs}h</span>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  );
-                })}
-                <td style={{textAlign:"center",verticalAlign:"middle"}}>
-                  <button onClick={() => removeShift(shift.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:14,padding:4}} title="Remove shift">&#10005;</button>
-                </td>
-              </tr>
-            ))}
+            {rows.map(row => {
+              const emp = nonAdmin.find(e => e.id === row.empId);
+              const weekHrs = getWeekHours(row.empId);
+              return (
+                <tr key={row.id}>
+                  <td style={{paddingLeft:12,verticalAlign:"middle"}}>
+                    <select
+                      value={row.empId}
+                      onChange={e => changeRowEmployee(row.id, row.empId, e.target.value)}
+                      style={{width:"100%",fontSize:13,padding:"8px 6px",fontWeight:600,borderRadius:8,border:"1px solid var(--border2)",background:"var(--bg2)"}}
+                    >
+                      <option value="">-- Select Employee --</option>
+                      {nonAdmin.map(e => (
+                        <option key={e.id} value={e.id} disabled={assignedEmpIds.includes(e.id) && e.id !== row.empId}>
+                          {e.name} (Role {e.role})
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  {DAYS.map((_, di) => {
+                    const c = getCell(row.empId, di);
+                    const hrs = c.on ? calcShiftHours(c.start, c.end) : 0;
+                    return (
+                      <td key={di} style={{padding:"6px 4px",verticalAlign:"top",background:c.on?"rgba(22,163,74,.03)":"transparent"}}>
+                        <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"center",minHeight:44}}>
+                          {row.empId ? (
+                            <>
+                              <div
+                                onClick={() => setCell(row.empId, di, { on: !c.on })}
+                                style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
+                                  background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
+                                  border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
+                              >
+                                {c.on ? "ON" : "OFF"}
+                              </div>
+                              {c.on && (
+                                <>
+                                  <select value={c.start} onChange={e => setCell(row.empId, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                                  </select>
+                                  <select value={c.end} onChange={e => setCell(row.empId, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
+                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                                  </select>
+                                  <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            <span style={{fontSize:10,color:"var(--muted)",fontStyle:"italic"}}>—</span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td style={{textAlign:"center",verticalAlign:"middle",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:weekHrs>0?"var(--green)":"var(--muted)"}}>
+                    {weekHrs}h
+                  </td>
+                  <td style={{textAlign:"center",verticalAlign:"middle",padding:"6px 4px"}}>
+                    {row.empId ? (
+                      <select
+                        value={row.deliveryRole || ""}
+                        onChange={e => setRows(prev => prev.map(r => r.id === row.id ? { ...r, deliveryRole: e.target.value } : r))}
+                        style={{width:"100%",fontSize:10,padding:"4px 2px",borderRadius:6,textAlign:"center"}}
+                      >
+                        <option value="">--</option>
+                        <option value="A">Role A</option>
+                        <option value="B">Role B</option>
+                      </select>
+                    ) : <span style={{fontSize:10,color:"var(--muted)"}}>--</span>}
+                  </td>
+                  <td style={{textAlign:"center",verticalAlign:"middle"}}>
+                    <button onClick={() => removeRow(row.id, row.empId)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4}} title="Remove row">&#10005;</button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:12}}>
-        <button className="btn primary small" onClick={addShift} style={{padding:"10px 20px",fontSize:13}}>+ Add Shift</button>
+      <div style={{display:"flex",gap:10,marginTop:12}}>
+        <button className="btn primary small" onClick={addRow} style={{padding:"10px 20px",fontSize:13}}>+ Add Employee</button>
+        {rows.length > 0 && <span style={{fontSize:12,color:"var(--muted2)",alignSelf:"center"}}>{rows.filter(r=>r.empId).length} employee{rows.filter(r=>r.empId).length!==1?"s":""} scheduled</span>}
       </div>
       <div className="sched-rule">
         <span style={{fontSize:16}}>&#9888;</span>
@@ -876,106 +938,209 @@ function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) 
 }
 
 // ─── ADMIN: TASKS ────────────────────────────────────────────────────────────
-function AdminTasks({ employees, tasks, setTasks, toast }) {
+function AdminTasks({ tasks, setTasks, toast }) {
+  const [activeTab, setActiveTab] = useState("daily");
   const [showModal, setShowModal] = useState(false);
   const [editTask, setEditTask] = useState(null);
-  const [form, setForm] = useState({ title:"", desc:"", assignTo:"all", duration:5, scheduledTime:"", isRecurring:false, dayOfWeek:[], isTemplate:false });
-  const nonAdmin = employees.filter(e => e.role !== "admin");
+  const [form, setForm] = useState({ category:"daily", title:"", desc:"", duration:5, scheduledTime:"09:05", frequency:1, order:1, role:"A" });
 
-  const openNew = () => { setForm({ title:"", desc:"", assignTo:"all", duration:5, scheduledTime:"", isRecurring:false, dayOfWeek:[], isTemplate:false }); setEditTask(null); setShowModal(true); };
+  const dailyTasks = tasks.filter(t => t.category === "daily");
+  const deliveryTasks = tasks.filter(t => t.category === "delivery");
+
+  // Group daily tasks by scheduledTime
+  const dailyByTime = {};
+  dailyTasks.forEach(t => {
+    const key = t.scheduledTime || "unscheduled";
+    if (!dailyByTime[key]) dailyByTime[key] = [];
+    dailyByTime[key].push(t);
+  });
+  Object.keys(dailyByTime).forEach(k => dailyByTime[k].sort((a, b) => (a.order || 0) - (b.order || 0)));
+  const dailyTimeSlots = Object.keys(dailyByTime).sort();
+
+  const deliveryA = deliveryTasks.filter(t => t.role === "A").sort((a, b) => (a.order || 0) - (b.order || 0));
+  const deliveryB = deliveryTasks.filter(t => t.role === "B").sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  const formatSlotTime = (t) => {
+    if (t === "unscheduled") return "Unscheduled";
+    const [hh, mm] = t.split(":").map(Number);
+    const h = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+    const ap = hh >= 12 ? "PM" : "AM";
+    return h + ":" + String(mm).padStart(2, "0") + " " + ap;
+  };
+
+  const openNewDaily = (timeSlot) => {
+    const existing = dailyByTime[timeSlot] || [];
+    const maxOrder = existing.length > 0 ? Math.max(...existing.map(t => t.order || 0)) : 0;
+    setForm({ category:"daily", title:"", desc:"", duration:5, scheduledTime:timeSlot === "unscheduled" ? "" : timeSlot, frequency:1, order:maxOrder + 1, role:"A" });
+    setEditTask(null); setShowModal(true);
+  };
+  const openNewDelivery = (role) => {
+    const existing = role === "A" ? deliveryA : deliveryB;
+    const maxOrder = existing.length > 0 ? Math.max(...existing.map(t => t.order || 0)) : 0;
+    setForm({ category:"delivery", title:"", desc:"", duration:5, scheduledTime:"", frequency:1, order:maxOrder + 1, role });
+    setEditTask(null); setShowModal(true);
+  };
+  const openNewDailySlot = () => {
+    setForm({ category:"daily", title:"", desc:"", duration:5, scheduledTime:"", frequency:1, order:1, role:"A" });
+    setEditTask(null); setShowModal(true);
+  };
   const openEdit = (t) => { setForm({...t}); setEditTask(t.id); setShowModal(true); };
-  const toggleDay = (d) => setForm(f => ({...f, dayOfWeek: f.dayOfWeek.includes(d) ? f.dayOfWeek.filter(x=>x!==d) : [...f.dayOfWeek, d]}));
 
   const save = () => {
     if (!form.title.trim()) return;
-    if (editTask) { setTasks(ts => ts.map(t => t.id===editTask ? {...form,id:editTask} : t)); toast.show("Task updated"); }
-    else { setTasks(ts => [...ts, {...form, id: uid()}]); toast.show("Task created"); }
+    if (editTask) {
+      setTasks(ts => ts.map(t => t.id === editTask ? { ...form, id: editTask } : t));
+      toast.show("Task updated");
+    } else {
+      setTasks(ts => [...ts, { ...form, id: uid() }]);
+      toast.show("Task created");
+    }
     setShowModal(false);
   };
-  const del = (id) => { setTasks(ts => ts.filter(t => t.id!==id)); toast.show("Task deleted","warning"); };
-  const moveTask = (idx, dir) => {
-    setTasks(ts => {
-      const active = ts.filter(t => !t.isTemplate); const templates = ts.filter(t => t.isTemplate);
-      const ni = idx+dir; if (ni<0||ni>=active.length) return ts;
-      const copy = [...active]; [copy[idx],copy[ni]] = [copy[ni],copy[idx]];
-      return [...copy,...templates];
-    });
-  };
-  const getAssignLabel = (t) => {
-    if (t.assignTo==="all") return "All Staff";
-    if (["A","B","C"].includes(t.assignTo)) return "Role "+t.assignTo;
-    const emp = employees.find(e => e.id===t.assignTo);
-    return emp ? emp.name : t.assignTo;
+  const del = (id) => { setTasks(ts => ts.filter(t => t.id !== id)); toast.show("Task deleted", "warning"); };
+
+  const moveTask = (task, dir, group) => {
+    const idx = group.findIndex(t => t.id === task.id);
+    const ni = idx + dir;
+    if (ni < 0 || ni >= group.length) return;
+    const otherTask = group[ni];
+    setTasks(ts => ts.map(t => {
+      if (t.id === task.id) return { ...t, order: otherTask.order };
+      if (t.id === otherTask.id) return { ...t, order: task.order };
+      return t;
+    }));
   };
 
-  const templates = tasks.filter(t => t.isTemplate);
-  const active = tasks.filter(t => !t.isTemplate);
+  const renderTaskCard = (t, idx, group) => (
+    <div className="task-card" key={t.id}>
+      <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",flexDirection:"column",gap:2,marginRight:6}}>
+          <button className="btn ghost small" onClick={() => moveTask(t, -1, group)} disabled={idx===0} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9650;</button>
+          <button className="btn ghost small" onClick={() => moveTask(t, 1, group)} disabled={idx===group.length-1} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9660;</button>
+        </div>
+        <div style={{flex:1}}>
+          <div className="task-hdr">
+            <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",marginRight:6}}>#{t.order || idx+1}</span>
+            <div className="task-name" style={{fontSize:13}}>{t.title}</div>
+            {t.category === "delivery" && <span className={"task-badge badge-"+(t.role==="A"?"A":"B")}>Role {t.role}</span>}
+            {t.category === "daily" && <span className="task-badge badge-all">All Staff</span>}
+          </div>
+          {t.desc && <div className="task-meta">{t.desc}</div>}
+          <div className="task-footer">
+            <span style={{fontSize:11,color:"var(--muted2)"}}>&#9201; {t.duration} min</span>
+            {t.category === "daily" && t.frequency > 1 && <span style={{fontSize:11,color:"var(--amber)",fontWeight:500}}>Every {t.frequency} days</span>}
+            <div className="spacer" />
+            <button className="btn small" onClick={() => openEdit(t)}>Edit</button>
+            <button className="btn small danger" onClick={() => del(t.id)}>Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div>
-      <div className="row" style={{marginBottom:18}}>
-        <div className="sec-head" style={{marginBottom:0}}>Active Tasks ({active.length})</div>
-        <div className="spacer" />
-        <button className="btn primary small" onClick={openNew}>+ New Task</button>
+      <div className="period-tabs" style={{marginBottom:18}}>
+        <div className={"period-tab"+(activeTab==="daily"?" on":"")} onClick={() => setActiveTab("daily")}>Daily Tasks ({dailyTasks.length})</div>
+        <div className={"period-tab"+(activeTab==="delivery"?" on":"")} onClick={() => setActiveTab("delivery")}>Delivery Tasks ({deliveryTasks.length})</div>
       </div>
-      {active.length===0 && <div style={{color:"var(--muted2)",fontSize:13,padding:"30px 0",textAlign:"center"}}>No tasks yet.</div>}
-      {active.map((t, idx) => (
-        <div className="task-card" key={t.id}>
-          <div style={{display:"flex",gap:8}}>
-            <div style={{display:"flex",flexDirection:"column",gap:2,marginRight:6}}>
-              <button className="btn ghost small" onClick={() => moveTask(idx,-1)} disabled={idx===0} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9650;</button>
-              <button className="btn ghost small" onClick={() => moveTask(idx,1)} disabled={idx===active.length-1} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9660;</button>
-            </div>
-            <div style={{flex:1}}>
-              <div className="task-hdr"><div className="task-name">{t.title}</div><span className={"task-badge badge-"+(["A","B","C"].includes(t.assignTo)?t.assignTo:"all")}>{getAssignLabel(t)}</span></div>
-              {t.desc && <div className="task-meta">{t.desc}</div>}
-              <div className="task-footer">
-                {t.scheduledTime && <span style={{fontSize:11,color:"var(--muted2)"}}>&#9200; {t.scheduledTime}</span>}
-                {t.isRecurring && t.dayOfWeek.length>0 && <span style={{fontSize:11,color:"var(--muted2)"}}>&#128257; {t.dayOfWeek.map(d=>DAY_FULL[d].slice(0,3)).join(", ")}</span>}
-                <span style={{fontSize:11,color:"var(--muted2)"}}>&#9201; {t.duration} min</span>
-                <div className="spacer" />
-                <button className="btn small" onClick={() => openEdit(t)}>Edit</button>
-                <button className="btn small danger" onClick={() => del(t.id)}>Delete</button>
+
+      {activeTab === "daily" && (
+        <div>
+          <div className="row" style={{marginBottom:14}}>
+            <div style={{fontSize:12,color:"var(--muted2)"}}>Tasks grouped by scheduled time. All staff complete these in order.</div>
+            <div className="spacer" />
+            <button className="btn primary small" onClick={openNewDailySlot}>+ New Daily Task</button>
+          </div>
+          {dailyTimeSlots.length === 0 && <div style={{color:"var(--muted2)",fontSize:13,padding:"30px 0",textAlign:"center"}}>No daily tasks yet.</div>}
+          {dailyTimeSlots.map(slot => {
+            const slotTasks = dailyByTime[slot];
+            return (
+              <div key={slot} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{fontSize:14,fontWeight:600,color:"var(--text)"}}>&#9200; {formatSlotTime(slot)}</div>
+                  <div style={{flex:1,height:1,background:"var(--border)"}} />
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{slotTasks.length} task{slotTasks.length!==1?"s":""}</span>
+                  <button className="btn small" onClick={() => openNewDaily(slot)}>+ Add</button>
+                </div>
+                {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks))}
               </div>
+            );
+          })}
+        </div>
+      )}
+
+      {activeTab === "delivery" && (
+        <div>
+          <div style={{fontSize:12,color:"var(--muted2)",marginBottom:14}}>These tasks only appear when a vendor submits a delivery. Role A and Role B are assigned in the Schedule tab.</div>
+          <div style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Role A Tasks</div>
+              <div style={{flex:1,height:1,background:"var(--border)"}} />
+              <span style={{fontSize:11,color:"var(--muted2)"}}>{deliveryA.length} task{deliveryA.length!==1?"s":""}</span>
+              <button className="btn small" onClick={() => openNewDelivery("A")}>+ Add</button>
             </div>
+            {deliveryA.length === 0 && <div style={{color:"var(--muted2)",fontSize:12,padding:"14px 0",textAlign:"center"}}>No Role A tasks.</div>}
+            {deliveryA.map((t, idx) => renderTaskCard(t, idx, deliveryA))}
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--blue)"}}>Role B Tasks</div>
+              <div style={{flex:1,height:1,background:"var(--border)"}} />
+              <span style={{fontSize:11,color:"var(--muted2)"}}>{deliveryB.length} task{deliveryB.length!==1?"s":""}</span>
+              <button className="btn small" onClick={() => openNewDelivery("B")}>+ Add</button>
+            </div>
+            {deliveryB.length === 0 && <div style={{color:"var(--muted2)",fontSize:12,padding:"14px 0",textAlign:"center"}}>No Role B tasks.</div>}
+            {deliveryB.map((t, idx) => renderTaskCard(t, idx, deliveryB))}
           </div>
         </div>
-      ))}
-      {templates.length>0 && <>
-        <div className="sec-head" style={{marginTop:20}}>Saved Templates ({templates.length})</div>
-        {templates.map(t => (
-          <div className="task-card" key={t.id} style={{opacity:.65,borderStyle:"dashed"}}>
-            <div className="task-hdr"><div className="task-name">{t.title}</div><span className="task-badge" style={{background:"var(--bg4)",color:"var(--muted2)"}}>Template</span></div>
-            <div className="task-footer">
-              <span style={{fontSize:11,color:"var(--muted2)"}}>&#9201; {t.duration} min</span><div className="spacer" />
-              <button className="btn small primary" onClick={() => { setTasks(ts => [...ts, {...t, id:uid(), isTemplate:false}]); toast.show("Template applied"); }}>Use</button>
-              <button className="btn small" onClick={() => openEdit(t)}>Edit</button>
-              <button className="btn small danger" onClick={() => del(t.id)}>Delete</button>
-            </div>
-          </div>
-        ))}
-      </>}
+      )}
+
       {showModal && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setShowModal(false)}>
           <div className="modal">
             <div className="modal-title">{editTask ? "Edit Task" : "New Task"}</div>
-            <div className="form-group"><label>Task Title</label><input type="text" value={form.title} onChange={e => setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. Vacuum floor" /></div>
-            <div className="form-group"><label>Description</label><textarea rows={2} value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} style={{resize:"vertical"}} placeholder="Instructions..." /></div>
-            <div className="form-group"><label>Assign To</label>
-              <select value={form.assignTo} onChange={e => setForm(f=>({...f,assignTo:e.target.value}))}>
-                <option value="all">All Staff</option><option value="A">Role A</option><option value="B">Role B</option><option value="C">Role C</option>
-                {nonAdmin.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            <div className="form-group"><label>Category</label>
+              <select value={form.category} onChange={e => setForm(f=>({...f,category:e.target.value}))} disabled={!!editTask}>
+                <option value="daily">Daily Task</option>
+                <option value="delivery">Delivery Task</option>
               </select>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <div className="form-group"><label>Duration (min)</label><input type="number" min={1} value={form.duration} onChange={e => setForm(f=>({...f,duration:parseInt(e.target.value)||1}))} /></div>
-              <div className="form-group"><label>Scheduled Time</label><input type="time" value={form.scheduledTime} onChange={e => setForm(f=>({...f,scheduledTime:e.target.value}))} /></div>
-            </div>
-            <div className="form-group">
-              <div className="row" style={{marginBottom:10}}><label style={{marginBottom:0}}>Recurring</label><div className="spacer" /><div className={"toggle"+(form.isRecurring?" on":"")} onClick={() => setForm(f=>({...f,isRecurring:!f.isRecurring}))}><div className="toggle-knob" /></div></div>
-              {form.isRecurring && <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{DAY_FULL.map((d,i) => <div key={i} onClick={() => toggleDay(i)} style={{padding:"5px 12px",borderRadius:20,fontSize:11,cursor:"pointer",fontWeight:600,background:form.dayOfWeek.includes(i)?"rgba(22,163,74,.08)":"var(--bg4)",color:form.dayOfWeek.includes(i)?"var(--green)":"var(--muted2)",border:"1px solid "+(form.dayOfWeek.includes(i)?"rgba(22,163,74,.25)":"var(--border)")}}>{d.slice(0,3)}</div>)}</div>}
-            </div>
-            <div className="form-group"><div className="row"><label style={{marginBottom:0}}>Save as Template</label><div className="spacer" /><div className={"toggle"+(form.isTemplate?" on":"")} onClick={() => setForm(f=>({...f,isTemplate:!f.isTemplate}))}><div className="toggle-knob" /></div></div></div>
+            <div className="form-group"><label>Task Title</label><input type="text" value={form.title} onChange={e => setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. Vacuum floor" /></div>
+            <div className="form-group"><label>Description (optional)</label><textarea rows={2} value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} style={{resize:"vertical"}} placeholder="Instructions..." /></div>
+            {form.category === "daily" && (
+              <>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                  <div className="form-group"><label>Duration (min)</label><input type="number" min={1} value={form.duration} onChange={e => setForm(f=>({...f,duration:parseInt(e.target.value)||1}))} /></div>
+                  <div className="form-group"><label>Scheduled Time</label><input type="time" value={form.scheduledTime||""} onChange={e => setForm(f=>({...f,scheduledTime:e.target.value}))} /></div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                  <div className="form-group"><label>Frequency</label>
+                    <select value={form.frequency||1} onChange={e => setForm(f=>({...f,frequency:parseInt(e.target.value)||1}))}>
+                      <option value={1}>Daily</option>
+                      <option value={2}>Every 2 days</option>
+                      <option value={3}>Every 3 days</option>
+                      <option value={7}>Weekly</option>
+                    </select>
+                  </div>
+                  <div className="form-group"><label>Order in slot</label><input type="number" min={1} value={form.order||1} onChange={e => setForm(f=>({...f,order:parseInt(e.target.value)||1}))} /></div>
+                </div>
+              </>
+            )}
+            {form.category === "delivery" && (
+              <>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                  <div className="form-group"><label>Duration (min)</label><input type="number" min={1} value={form.duration} onChange={e => setForm(f=>({...f,duration:parseInt(e.target.value)||1}))} /></div>
+                  <div className="form-group"><label>Delivery Role</label>
+                    <select value={form.role||"A"} onChange={e => setForm(f=>({...f,role:e.target.value}))}>
+                      <option value="A">Role A</option>
+                      <option value="B">Role B</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group"><label>Order in role</label><input type="number" min={1} value={form.order||1} onChange={e => setForm(f=>({...f,order:parseInt(e.target.value)||1}))} /></div>
+              </>
+            )}
             <div className="modal-actions"><button className="btn" onClick={() => setShowModal(false)}>Cancel</button><button className="btn primary" onClick={save}>{editTask?"Save Changes":"Create Task"}</button></div>
           </div>
         </div>
@@ -1113,6 +1278,8 @@ function VendorFormPage() {
       const notifs = JSON.parse(localStorage.getItem("crewos_notifs")) || [];
       notifs.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6), type:"vendor", title:"Vendor delivery: "+company, desc:"Delivery form submitted. Tasks triggered for all roles.", time: timeStr });
       localStorage.setItem("crewos_notifs", JSON.stringify(notifs));
+      // Flag pending delivery so employee task view picks it up
+      localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: Date.now().toString(36) }));
     } catch {}
     setSubmitted(true);
   };
@@ -1530,81 +1697,232 @@ function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, on
 }
 
 // ─── EMPLOYEE: MY TASKS ──────────────────────────────────────────────────────
-function EmpTasks({ employee, tasks }) {
+function EmpTasks({ employee, tasks, schedule }) {
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
+  const [now, setNow] = useState(new Date());
+  const [pendingDelivery, setPendingDelivery] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_pending_delivery")) || null; } catch { return null; }
+  });
+  const [deliveryTasksDone, setDeliveryTasksDone] = useState(false);
   const intervals = useRef({});
 
-  const myTasks = tasks.filter(t => !t.isTemplate && (t.assignTo==="all" || t.assignTo===employee.role || t.assignTo===employee.id));
+  // Poll for pending delivery and update time
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setNow(new Date());
+      try {
+        const pd = JSON.parse(localStorage.getItem("crewos_pending_delivery"));
+        if (pd && !pendingDelivery) setPendingDelivery(pd);
+      } catch {}
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [pendingDelivery]);
+
+  // Determine employee's delivery role from schedule
+  const weekStart = getWeekStart();
+  const todayDow = new Date().getDay();
+  const dayIdx = todayDow === 0 ? 6 : todayDow - 1; // Mon=0..Sun=6
+  let myDeliveryRole = "";
+  try {
+    const rows = JSON.parse(localStorage.getItem("crewos_sched_rows_" + weekStart)) || [];
+    const myRow = rows.find(r => r.empId === employee.id);
+    if (myRow && myRow.deliveryRole) {
+      myDeliveryRole = myRow.deliveryRole;
+    } else {
+      // If not explicitly assigned, check if the other employee has a role, and take the remaining one
+      const otherRows = rows.filter(r => r.empId && r.empId !== employee.id);
+      const otherRoles = otherRows.map(r => r.deliveryRole).filter(Boolean);
+      if (otherRoles.includes("A") && !otherRoles.includes("B")) myDeliveryRole = "B";
+      else if (otherRoles.includes("B") && !otherRoles.includes("A")) myDeliveryRole = "A";
+    }
+  } catch {}
+
+  // Filter daily tasks: only tasks whose frequency matches today
+  const dailyTasks = tasks.filter(t => {
+    if (t.category !== "daily") return false;
+    if (!t.frequency || t.frequency <= 1) return true;
+    // Use day-of-year to determine if task runs today
+    const startOfYear = new Date(now.getFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now - startOfYear) / 86400000);
+    return dayOfYear % t.frequency === 0;
+  });
+
+  // Group daily tasks by scheduledTime
+  const dailyByTime = {};
+  dailyTasks.forEach(t => {
+    const key = t.scheduledTime || "00:00";
+    if (!dailyByTime[key]) dailyByTime[key] = [];
+    dailyByTime[key].push(t);
+  });
+  Object.keys(dailyByTime).forEach(k => dailyByTime[k].sort((a, b) => (a.order || 0) - (b.order || 0)));
+  const dailyTimeSlots = Object.keys(dailyByTime).sort();
+
+  // Only show time slots that have arrived
+  const currentTimeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+  const activeSlots = dailyTimeSlots.filter(slot => slot <= currentTimeStr);
+  const futureSlots = dailyTimeSlots.filter(slot => slot > currentTimeStr);
+
+  // Delivery tasks for this employee
+  const myDeliveryTasks = pendingDelivery && myDeliveryRole && !deliveryTasksDone
+    ? tasks.filter(t => t.category === "delivery" && t.role === myDeliveryRole).sort((a, b) => (a.order || 0) - (b.order || 0))
+    : [];
+
+  // Flatten all visible tasks for counting
+  const allActiveDailyTasks = activeSlots.flatMap(slot => dailyByTime[slot]);
+  const allVisibleTasks = [...allActiveDailyTasks, ...myDeliveryTasks];
+
   const getState = (id) => taskStates[id] || { status:"pending", remaining:null, started:false };
 
   const startTask = (task) => {
-    const secs = task.duration*60;
-    setTaskStates(s => ({...s, [task.id]: {status:"running",remaining:secs,started:true}}));
+    const secs = task.duration * 60;
+    setTaskStates(s => ({...s, [task.id]: {status:"running", remaining:secs, started:true}}));
     intervals.current[task.id] = setInterval(() => {
       setTaskStates(s => {
-        const cur = s[task.id]; if (!cur||cur.status!=="running") return s;
-        const next = cur.remaining-1;
-        if (next<=0) { clearInterval(intervals.current[task.id]); return {...s,[task.id]:{...cur,status:"prompt",remaining:0}}; }
-        return {...s,[task.id]:{...cur,remaining:next}};
+        const cur = s[task.id]; if (!cur || cur.status !== "running") return s;
+        const next = cur.remaining - 1;
+        if (next <= 0) { clearInterval(intervals.current[task.id]); return {...s, [task.id]: {...cur, status:"prompt", remaining:0}}; }
+        return {...s, [task.id]: {...cur, remaining:next}};
       });
     }, 1000);
   };
 
   useEffect(() => { return () => Object.values(intervals.current).forEach(clearInterval); }, []);
-  useEffect(() => { const p = myTasks.find(t => getState(t.id).status==="prompt"); if (p && !completeModal) setCompleteModal(p); }, [taskStates]);
+  useEffect(() => {
+    const p = allVisibleTasks.find(t => getState(t.id).status === "prompt");
+    if (p && !completeModal) setCompleteModal(p);
+  }, [taskStates]);
+
+  // Check if all delivery tasks are done
+  useEffect(() => {
+    if (myDeliveryTasks.length > 0 && myDeliveryTasks.every(t => getState(t.id).status === "done")) {
+      setDeliveryTasksDone(true);
+      localStorage.removeItem("crewos_pending_delivery");
+      setPendingDelivery(null);
+    }
+  }, [taskStates, myDeliveryTasks.length]);
 
   const addTime = (taskId, mins) => {
     clearInterval(intervals.current[taskId]);
-    const secs = mins*60;
-    setTaskStates(s => ({...s,[taskId]:{status:"running",remaining:secs,started:true}}));
+    const secs = mins * 60;
+    setTaskStates(s => ({...s, [taskId]: {status:"running", remaining:secs, started:true}}));
     setCompleteModal(null);
     intervals.current[taskId] = setInterval(() => {
       setTaskStates(s => {
-        const cur = s[taskId]; if (!cur||cur.status!=="running") return s;
-        const next = cur.remaining-1;
-        if (next<=0) { clearInterval(intervals.current[taskId]); return {...s,[taskId]:{...cur,status:"prompt",remaining:0}}; }
-        return {...s,[taskId]:{...cur,remaining:next}};
+        const cur = s[taskId]; if (!cur || cur.status !== "running") return s;
+        const next = cur.remaining - 1;
+        if (next <= 0) { clearInterval(intervals.current[taskId]); return {...s, [taskId]: {...cur, status:"prompt", remaining:0}}; }
+        return {...s, [taskId]: {...cur, remaining:next}};
       });
     }, 1000);
   };
 
-  const markDone = (taskId) => { clearInterval(intervals.current[taskId]); setTaskStates(s => ({...s,[taskId]:{...s[taskId],status:"done"}})); setCompleteModal(null); };
-  const formatTime = (secs) => Math.floor(secs/60)+":"+String(secs%60).padStart(2,"0");
-  const completedCount = myTasks.filter(t => getState(t.id).status==="done").length;
-  const isTaskLocked = (i) => i>0 && getState(myTasks[i-1].id).status!=="done";
+  const markDone = (taskId) => { clearInterval(intervals.current[taskId]); setTaskStates(s => ({...s, [taskId]: {...s[taskId], status:"done"}})); setCompleteModal(null); };
+  const formatTime = (secs) => Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
+
+  const completedCount = allVisibleTasks.filter(t => getState(t.id).status === "done").length;
+
+  const formatSlotTime = (t) => {
+    const [hh, mm] = t.split(":").map(Number);
+    const h = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+    const ap = hh >= 12 ? "PM" : "AM";
+    return h + ":" + String(mm).padStart(2, "0") + " " + ap;
+  };
+
+  const renderTaskCard = (t, idx, group) => {
+    const st = getState(t.id);
+    const locked = idx > 0 && getState(group[idx - 1].id).status !== "done";
+    const pct = st.started && t.duration > 0 ? Math.max(0, Math.min(100, 100 - (st.remaining / (t.duration * 60)) * 100)) : 0;
+    return (
+      <div className={"task-card" + (st.status === "running" ? " active-task" : "") + (st.status === "done" ? " done-task" : "")} key={t.id} style={locked ? {opacity:.35} : {}}>
+        <div className="task-hdr">
+          <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",marginRight:4}}>#{idx + 1}</span>
+          <div className="task-name">{st.status === "done" && <span style={{color:"var(--green)",marginRight:6}}>&#10003;</span>}{t.title}</div>
+          {st.status === "done" && <span className="task-badge" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>Done</span>}
+          {st.status === "running" && <span className="timer-display">{formatTime(st.remaining)}</span>}
+          {st.status === "prompt" && <span className="timer-display timer-alert">Time's up!</span>}
+        </div>
+        {t.desc && <div className="task-meta">{t.desc}</div>}
+        {st.started && st.status !== "done" && <div className="progress-bar"><div className="progress-fill" style={{width:pct + "%"}} /></div>}
+        <div className="task-footer" style={{marginTop:st.started ? 10 : 4}}>
+          <span style={{fontSize:10,color:"var(--muted2)"}}>&#9201; {t.duration} min</span><div className="spacer" />
+          {st.status === "pending" && !locked && <button className="btn primary small" onClick={() => startTask(t)}>Start Task</button>}
+          {locked && <span style={{fontSize:11,color:"var(--muted2)"}}>Complete previous task first</span>}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div>
+      {/* Progress bar */}
       <div style={{marginBottom:16}}>
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{fontSize:13,fontWeight:500}}>{completedCount}/{myTasks.length} completed</span>
-          <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(myTasks.length>0?(completedCount/myTasks.length)*100:0)+"%",background:"var(--green)",borderRadius:2,transition:"width .3s"}} /></div>
+          <span style={{fontSize:13,fontWeight:500}}>{completedCount}/{allVisibleTasks.length} completed</span>
+          <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(allVisibleTasks.length > 0 ? (completedCount / allVisibleTasks.length) * 100 : 0) + "%",background:"var(--green)",borderRadius:2,transition:"width .3s"}} /></div>
         </div>
       </div>
-      {myTasks.length===0 && <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>No tasks assigned.</div>}
-      {myTasks.map((t,i) => {
-        const st = getState(t.id); const locked = isTaskLocked(i);
-        const pct = st.started && t.duration>0 ? Math.max(0,Math.min(100,100-(st.remaining/(t.duration*60))*100)) : 0;
+
+      {/* Daily Tasks by time slot */}
+      {activeSlots.length === 0 && myDeliveryTasks.length === 0 && (
+        <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>
+          No tasks active right now.
+          {futureSlots.length > 0 && <div style={{marginTop:8,fontSize:12}}>Next tasks at {formatSlotTime(futureSlots[0])}</div>}
+        </div>
+      )}
+
+      {activeSlots.map(slot => {
+        const slotTasks = dailyByTime[slot];
+        const slotDone = slotTasks.every(t => getState(t.id).status === "done");
         return (
-          <div className={"task-card"+(st.status==="running"?" active-task":"")+(st.status==="done"?" done-task":"")} key={t.id} style={locked?{opacity:.35}:{}}>
-            <div className="task-hdr">
-              <div className="task-name">{st.status==="done" && <span style={{color:"var(--green)",marginRight:6}}>&#10003;</span>}{t.title}</div>
-              {st.status==="done" && <span className="task-badge" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>Done</span>}
-              {st.status==="running" && <span className="timer-display">{formatTime(st.remaining)}</span>}
-              {st.status==="prompt" && <span className="timer-display timer-alert">Time's up!</span>}
-              {st.status==="pending" && t.scheduledTime && <span style={{fontSize:11,color:"var(--muted2)"}}>&#9200; {t.scheduledTime}</span>}
+          <div key={slot} style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{fontSize:14,fontWeight:600,color:slotDone ? "var(--green)" : "var(--text)"}}>
+                {slotDone ? "\u2713 " : ""}&#9200; {formatSlotTime(slot)}
+              </div>
+              <div style={{flex:1,height:1,background:"var(--border)"}} />
+              <span style={{fontSize:11,color:"var(--muted2)"}}>
+                {slotTasks.filter(t => getState(t.id).status === "done").length}/{slotTasks.length} done
+              </span>
             </div>
-            {t.desc && <div className="task-meta">{t.desc}</div>}
-            {st.started && st.status!=="done" && <div className="progress-bar"><div className="progress-fill" style={{width:pct+"%"}} /></div>}
-            <div className="task-footer" style={{marginTop:st.started?10:4}}>
-              <span style={{fontSize:10,color:"var(--muted2)"}}>&#9201; {t.duration} min</span><div className="spacer" />
-              {st.status==="pending" && !locked && <button className="btn primary small" onClick={() => startTask(t)}>Start Task</button>}
-              {locked && <span style={{fontSize:11,color:"var(--muted2)"}}>Complete previous task first</span>}
-            </div>
+            {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks))}
           </div>
         );
       })}
+
+      {/* Future slots preview */}
+      {futureSlots.length > 0 && activeSlots.length > 0 && (
+        <div style={{marginTop:10,marginBottom:20}}>
+          <div style={{fontSize:12,color:"var(--muted2)",fontStyle:"italic",textAlign:"center",padding:"10px 0",background:"var(--bg4)",borderRadius:10,border:"1px solid var(--border)"}}>
+            Upcoming: {futureSlots.map(s => formatSlotTime(s)).join(", ")}
+          </div>
+        </div>
+      )}
+
+      {/* Delivery Tasks Section */}
+      {pendingDelivery && !deliveryTasksDone && (
+        <div style={{marginTop:20}}>
+          <div style={{background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:14,padding:16,marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <span style={{fontSize:18}}>&#128666;</span>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Vendor Delivery</div>
+              <div className="spacer" />
+              <span className={"task-badge badge-"+(myDeliveryRole==="A"?"A":"B")}>You: Role {myDeliveryRole}</span>
+            </div>
+            <div style={{fontSize:12,color:"var(--muted2)"}}>
+              {pendingDelivery.company} &middot; {pendingDelivery.time}
+            </div>
+          </div>
+          {myDeliveryRole ? (
+            myDeliveryTasks.map((t, idx) => renderTaskCard(t, idx, myDeliveryTasks))
+          ) : (
+            <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
+              No delivery role assigned to you for today. Ask your admin to assign a delivery role in the schedule.
+            </div>
+          )}
+        </div>
+      )}
+
       {completeModal && (
         <div className="modal-overlay">
           <div className="modal" style={{textAlign:"center"}}>
@@ -1613,7 +1931,7 @@ function EmpTasks({ employee, tasks }) {
             <div style={{fontSize:14,color:"var(--muted3)",marginBottom:18}}>Did you complete this task?</div>
             <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14}} onClick={() => markDone(completeModal.id)}>&#10003; Yes, task complete</button>
             <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
-            <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id,m)}>+{m} min</div>)}</div>
+            <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
           </div>
         </div>
       )}
@@ -1646,10 +1964,33 @@ export default function App() {
   const [clockLogs, setClockLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_clocks"))||[]; } catch { return []; } });
   const [tasks, setTasks] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crewos_tasks")) || [
-      { id:"t1", title:"Log new delivery into POS", desc:"Scan and enter all SKUs. Verify quantities match manifest.", assignTo:"A", duration:15, scheduledTime:"", isRecurring:false, dayOfWeek:[], isTemplate:false },
-      { id:"t2", title:"Write product descriptions", desc:"2-3 sentences per product.", assignTo:"B", duration:20, scheduledTime:"", isRecurring:false, dayOfWeek:[], isTemplate:false },
-      { id:"t3", title:"Create labels and organize SKUs", desc:"Print labels, apply to products, organize on shelves.", assignTo:"C", duration:10, scheduledTime:"", isRecurring:false, dayOfWeek:[], isTemplate:false },
-      { id:"t4", title:"Vacuum floor", desc:"Nightly close procedure. Must wait full timer.", assignTo:"all", duration:5, scheduledTime:"21:00", isRecurring:true, dayOfWeek:[0,1,2,3,4,5,6], isTemplate:false },
+      // Daily Tasks - 9:05 AM slot
+      { id:"d1", category:"daily", title:"Turn on all lights, put the open sign out, turn on POS and log into Alleaves terminal1", desc:"", duration:3, scheduledTime:"09:05", frequency:1, order:1 },
+      { id:"d2", category:"daily", title:"Turn on both TVs and put on the menu", desc:"", duration:2, scheduledTime:"09:05", frequency:1, order:2 },
+      { id:"d3", category:"daily", title:"Turn on Kiosks and put the display on 'never' mode", desc:"", duration:2, scheduledTime:"09:05", frequency:1, order:3 },
+      { id:"d4", category:"daily", title:"Open the curtain", desc:"", duration:2, scheduledTime:"09:05", frequency:1, order:4 },
+      // Daily Tasks - 12:00 PM slot
+      { id:"d5", category:"daily", title:"Check all open orders and close them", desc:"", duration:30, scheduledTime:"12:00", frequency:1, order:1 },
+      { id:"d6", category:"daily", title:"Check inventory room and restock", desc:"", duration:30, scheduledTime:"12:00", frequency:1, order:2 },
+      { id:"d7", category:"daily", title:"Walk around the store and see if there are any items missing price tag", desc:"", duration:15, scheduledTime:"12:00", frequency:1, order:3 },
+      { id:"d8", category:"daily", title:"Go to our website woodhavencannabis.com and check menu", desc:"", duration:15, scheduledTime:"12:00", frequency:2, order:4 },
+      // Daily Tasks - 9:00 PM slot
+      { id:"d9", category:"daily", title:"Vacuum the floor", desc:"", duration:10, scheduledTime:"21:00", frequency:1, order:1 },
+      { id:"d10", category:"daily", title:"Mop the floor", desc:"", duration:15, scheduledTime:"21:00", frequency:2, order:2 },
+      { id:"d11", category:"daily", title:"Go to Carrot and close all transactions except for the pickup that has not been picked up", desc:"", duration:5, scheduledTime:"21:00", frequency:1, order:3 },
+      { id:"d12", category:"daily", title:"Refill the fridge", desc:"", duration:2, scheduledTime:"21:00", frequency:1, order:4 },
+      { id:"d13", category:"daily", title:"Take the sign in", desc:"", duration:2, scheduledTime:"21:00", frequency:1, order:5 },
+      { id:"d14", category:"daily", title:"Turn off TVs, terminals, AC and lights", desc:"", duration:1, scheduledTime:"21:00", frequency:1, order:6 },
+      // Delivery Tasks - Role A
+      { id:"v1", category:"delivery", title:"Upload invoice and manifest (take photo and upload it)", desc:"", duration:2, role:"A", order:1 },
+      { id:"v2", category:"delivery", title:"Log into Metrc, locate incoming transfer from vendor, verify quantity and accept transfer", desc:"", duration:5, role:"A", order:2 },
+      { id:"v3", category:"delivery", title:"Log into Alleaves POS, accept packages in POS, set price for each product", desc:"", duration:120, role:"A", order:3 },
+      // Delivery Tasks - Role B
+      { id:"v4", category:"delivery", title:"Create container label for new SKU", desc:"", duration:20, role:"B", order:1 },
+      { id:"v5", category:"delivery", title:"Write product description", desc:"", duration:90, role:"B", order:2 },
+      { id:"v6", category:"delivery", title:"Display sample on sale floor", desc:"", duration:30, role:"B", order:3 },
+      { id:"v7", category:"delivery", title:"Put THC % on the new inventory", desc:"", duration:45, role:"B", order:4 },
+      { id:"v8", category:"delivery", title:"Go to our website woodhavencannabis.com and check if all inventory on website, verify THC%, verify price, verify name and photos", desc:"", duration:15, role:"B", order:5 },
     ]; } catch { return []; }
   });
   const [overrides, setOverrides] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_overrides"))||{}; } catch { return {}; } });
@@ -1840,7 +2181,7 @@ export default function App() {
             <div className="live-time">{liveTime}</div>
             <div className="user-chip" onClick={() => setUser(null)}>
               <div className="avatar" style={{background:roleBg[user.role],color:roleColor[user.role]}}>{user.name.charAt(0)}</div>
-              <div className="user-info"><div className="user-name">{user.name}</div><div className="user-role">{isAdmin?"Administrator":"Staff"}</div></div>
+              <div className="user-info"><div className="user-name">{user.name}</div><div className="user-role">{isAdmin?"Administrator":"Role "+user.role}</div></div>
             </div>
           </div>
         </div>
@@ -1858,7 +2199,7 @@ export default function App() {
           {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
-          {isAdmin && adminTab==="tasks" && <AdminTasks employees={employees} tasks={tasks} setTasks={setTasks} toast={toast} />}
+          {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} toast={toast} />}
           {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
@@ -1866,7 +2207,7 @@ export default function App() {
 
           {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
           {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} />}
-          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} />}
+          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} />}
         </div>
       </div>
 
