@@ -68,6 +68,15 @@ async function firebaseGet(dbUrl, path) {
   } catch { return null; }
 }
 
+async function firebaseSet(dbUrl, path, data) {
+  if (!dbUrl) return null;
+  const cleanUrl = dbUrl.replace(/\/+$/, "");
+  try {
+    const res = await fetch(cleanUrl + "/" + path + ".json", { method: "PUT", body: JSON.stringify(data) });
+    return await res.json();
+  } catch { return null; }
+}
+
 // ─── STYLES (LIGHT THEME) ───────────────────────────────────────────────────
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
@@ -2135,14 +2144,34 @@ function AdminSettings({ settings, setSettings }) {
             <div className="setting-sub">Required for vendor form to work from other devices (phones). Create a free Firebase project, enable Realtime Database, and paste the URL here.</div>
           </div>
           <input type="text" value={settings.firebaseUrl || ""} onChange={e => setSettings(s=>({...s,firebaseUrl:e.target.value.trim()}))} placeholder="https://your-project.firebaseio.com" />
+          {settings.firebaseUrl && <button className="btn primary small" style={{marginTop:8}} onClick={async () => {
+            const fbUrl = settings.firebaseUrl;
+            const pushData = { employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, _lastUpdated: Date.now(), _updatedBy: "admin_push" };
+            await firebaseSet(fbUrl, "crewos_data", pushData);
+            toast.show("All data pushed to Firebase!");
+          }}>Push All Data to Cloud Now</button>}
+          {settings.firebaseUrl && <button className="btn small" style={{marginTop:6}} onClick={async () => {
+            const fbUrl = settings.firebaseUrl;
+            const data = await firebaseGet(fbUrl, "crewos_data");
+            if (data && data.employees) {
+              setEmployees(data.employees);
+              if (data.schedule) setSchedule(data.schedule);
+              if (data.clockLogs) setClockLogs(data.clockLogs);
+              if (data.tasks) setTasks(data.tasks);
+              if (data.overrides) setOverrides(data.overrides);
+              if (data.drawerLogs) setDrawerLogs(data.drawerLogs);
+              if (data.shiftNotes) setShiftNotes(data.shiftNotes);
+              toast.show("Data pulled from cloud!");
+            } else { toast.show("No data found in cloud", "error"); }
+          }}>Pull Data from Cloud</button>}
           {settings.firebaseUrl && (
             <div style={{fontSize:11,color:"var(--green)",background:"rgba(22,163,74,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(22,163,74,.15)"}}>
-              &#10003; Firebase connected. Vendor QR code will include this URL so forms submitted from phones sync to this device.
+              \u2713 Firebase connected! All data syncs across devices: employees, schedules, clock logs, tasks, payroll, and vendor deliveries.
             </div>
           )}
           {!settings.firebaseUrl && (
             <div style={{fontSize:11,color:"var(--amber)",background:"rgba(217,119,6,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(217,119,6,.15)",lineHeight:1.6}}>
-              <strong>Without Firebase:</strong> Vendor forms submitted from other devices (phones) won&apos;t trigger employee tasks. Only forms submitted on this same browser will work.
+              <strong>Without Firebase:</strong> Each device has its own data. Employees added on one device won&apos;t appear on another.
             </div>
           )}
         </div>
@@ -2808,19 +2837,70 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_drawer", JSON.stringify(drawerLogs)); }, [drawerLogs]);
   useEffect(() => { localStorage.setItem("crewos_shiftnotes", JSON.stringify(shiftNotes)); }, [shiftNotes]);
 
-  // ─── FIREBASE POLLING: detect vendor deliveries from cloud ──────────────
+  // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
   const [fbStartTime] = useState(() => Date.now());
+  const fbSyncRef = useRef({ pushing: false, lastPush: 0 });
+
+  // Push all data to Firebase whenever it changes
+  const syncDataKeys = [
+    ["employees", employees],
+    ["schedule", schedule],
+    ["clockLogs", clockLogs],
+    ["tasks", tasks],
+    ["overrides", overrides],
+    ["notifications", notifications],
+    ["settings_data", { ...settings, firebaseUrl: undefined }],
+    ["drawerLogs", drawerLogs],
+    ["shiftNotes", shiftNotes],
+  ];
 
   useEffect(() => {
     const fbUrl = settings.firebaseUrl;
-    if (!fbUrl) return;
+    if (!fbUrl || fbSyncRef.current.pushing) return;
+    // Debounce: don't push more than once per second
+    const now = Date.now();
+    if (now - fbSyncRef.current.lastPush < 1000) return;
+    fbSyncRef.current.lastPush = now;
+    fbSyncRef.current.pushing = true;
+    const pushData = {
+      employees, schedule, clockLogs, tasks, overrides,
+      notifications, drawerLogs, shiftNotes,
+      _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
+    };
+    firebaseSet(fbUrl, "crewos_data", pushData).then(() => {
+      fbSyncRef.current.pushing = false;
+    });
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes]);
 
-    const poll = async () => {
-      // Poll for new deliveries
-      const data = await firebaseGet(fbUrl, "deliveries");
-      if (data && typeof data === "object") {
-        Object.entries(data).forEach(([firebaseKey, delivery]) => {
+  // Pull data from Firebase on load + poll for changes
+  useEffect(() => {
+    const fbUrl = settings.firebaseUrl;
+    if (!fbUrl) return;
+    let lastPulled = 0;
+
+    const pull = async () => {
+      // Pull main data
+      const data = await firebaseGet(fbUrl, "crewos_data");
+      if (data && typeof data === "object" && data._lastUpdated) {
+        // Only apply if data is newer than what we last pulled AND not from us
+        if (data._lastUpdated > lastPulled && data._updatedBy !== (user?.id || "unknown")) {
+          lastPulled = data._lastUpdated;
+          if (data.employees && JSON.stringify(data.employees) !== JSON.stringify(employees)) setEmployees(data.employees);
+          if (data.schedule && JSON.stringify(data.schedule) !== JSON.stringify(schedule)) setSchedule(data.schedule);
+          if (data.clockLogs && JSON.stringify(data.clockLogs) !== JSON.stringify(clockLogs)) setClockLogs(data.clockLogs);
+          if (data.tasks && JSON.stringify(data.tasks) !== JSON.stringify(tasks)) setTasks(data.tasks);
+          if (data.overrides && JSON.stringify(data.overrides) !== JSON.stringify(overrides)) setOverrides(data.overrides);
+          if (data.notifications && JSON.stringify(data.notifications) !== JSON.stringify(notifications)) setNotifications(data.notifications);
+          if (data.drawerLogs && JSON.stringify(data.drawerLogs) !== JSON.stringify(drawerLogs)) setDrawerLogs(data.drawerLogs);
+          if (data.shiftNotes && JSON.stringify(data.shiftNotes) !== JSON.stringify(shiftNotes)) setShiftNotes(data.shiftNotes);
+        }
+      }
+
+      // Also poll for vendor deliveries
+      const deliveryData = await firebaseGet(fbUrl, "deliveries");
+      if (deliveryData && typeof deliveryData === "object") {
+        Object.entries(deliveryData).forEach(([firebaseKey, delivery]) => {
           if (fbSeenIds.has(firebaseKey)) return;
           fbSeenIds.add(firebaseKey);
           if (delivery.timestamp && delivery.timestamp > fbStartTime) {
@@ -2833,7 +2913,6 @@ export default function App() {
               desc: "Delivery form submitted. Tasks triggered for all roles.",
               time: timeStr,
             }, ...prev]);
-            // Also add to local delivery log
             try {
               const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries")) || [];
               if (!deliveries.some(d => d.id === delivery.id)) {
@@ -2841,7 +2920,6 @@ export default function App() {
                 localStorage.setItem("crewos_deliveries", JSON.stringify(deliveries));
               }
             } catch {}
-            // Set pending delivery to trigger employee tasks
             const pdItem = { company, time: timeStr, id: delivery.id || uid() };
             localStorage.setItem("crewos_pending_delivery", JSON.stringify(pdItem));
             const pdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
@@ -2849,28 +2927,11 @@ export default function App() {
           }
         });
       }
-
-      // Also poll for pending_delivery flag (in case delivery was pushed directly)
-      const pending = await firebaseGet(fbUrl, "pending_delivery");
-      if (pending && typeof pending === "object") {
-        // Get the most recent pending delivery
-        const entries = Object.entries(pending);
-        const recent = entries.filter(([, v]) => v.timestamp && v.timestamp > fbStartTime);
-        if (recent.length > 0) {
-          const [latestKey, latest] = recent.sort((a, b) => b[1].timestamp - a[1].timestamp)[0];
-          if (!fbSeenIds.has("pd_" + latestKey)) {
-            fbSeenIds.add("pd_" + latestKey);
-            const pdItem2 = { company: latest.company, time: latest.time, id: latest.id || uid() };
-            localStorage.setItem("crewos_pending_delivery", JSON.stringify(pdItem2));
-            const pdArr2 = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
-            if (!pdArr2.some(d => d.id === pdItem2.id)) { pdArr2.push(pdItem2); localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pdArr2)); }
-          }
-        }
-      }
     };
 
-    poll();
-    const iv = setInterval(poll, 5000);
+    // Initial pull (with small delay to let local state settle)
+    setTimeout(pull, 500);
+    const iv = setInterval(pull, 3000);
     return () => clearInterval(iv);
   }, [settings.firebaseUrl]);
 
