@@ -986,6 +986,52 @@ function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) 
   const totalHours = nonAdmin.reduce((s,e) => { const ov = getOverride(e.id); return s + (ov ? ov.hours : getActualHours(e.id)); }, 0);
   const totalPay = nonAdmin.reduce((s,e) => { const ov = getOverride(e.id); return s + (ov ? ov.hours : getActualHours(e.id)) * (e.rate||0); }, 0);
 
+  // Employee colors for calendar blocks
+  const empColors = [
+    { bg:"rgba(124,58,237,.12)", border:"rgba(124,58,237,.5)", text:"#7c3aed" },
+    { bg:"rgba(59,130,246,.12)", border:"rgba(59,130,246,.5)", text:"#3b82f6" },
+    { bg:"rgba(234,88,12,.12)", border:"rgba(234,88,12,.5)", text:"#ea580c" },
+    { bg:"rgba(22,163,74,.12)", border:"rgba(22,163,74,.5)", text:"#16a34a" },
+    { bg:"rgba(220,38,38,.12)", border:"rgba(220,38,38,.5)", text:"#dc2626" },
+    { bg:"rgba(245,158,11,.12)", border:"rgba(245,158,11,.5)", text:"#f59e0b" },
+    { bg:"rgba(6,182,212,.12)", border:"rgba(6,182,212,.5)", text:"#06b6d4" },
+    { bg:"rgba(236,72,153,.12)", border:"rgba(236,72,153,.5)", text:"#ec4899" },
+  ];
+
+  // Build calendar data: for each day, collect all shifts from all employees
+  const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const dayShort = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+  const wsDate = new Date(weekStart + "T00:00:00");
+
+  const calendarDays = days.map((dayName, i) => {
+    const dayDate = new Date(wsDate); dayDate.setDate(wsDate.getDate() + i);
+    const dayStr = dayDate.toDateString();
+    const dateLabel = dayDate.toLocaleDateString("en-US", { month:"short", day:"numeric" }).toUpperCase();
+
+    const blocks = [];
+    nonAdmin.forEach((emp, empIdx) => {
+      const empLogs = clockLogs.filter(l => l.employeeId === emp.id).sort((a,b) => new Date(a.time) - new Date(b.time));
+      const dayLogs = empLogs.filter(l => new Date(l.time).toDateString() === dayStr);
+      let curIn = null;
+      for (const l of dayLogs) {
+        if (l.type === "in") curIn = new Date(l.time);
+        else if (l.type === "out" && curIn) {
+          const hrs = (new Date(l.time) - curIn) / 3600000;
+          blocks.push({ emp, empIdx, inTime: curIn, outTime: new Date(l.time), hours: hrs, active: false });
+          curIn = null;
+        }
+      }
+      if (curIn) blocks.push({ emp, empIdx, inTime: curIn, outTime: null, hours: (new Date() - curIn) / 3600000, active: true });
+    });
+
+    // Sort blocks by clock-in time
+    blocks.sort((a,b) => a.inTime - b.inTime);
+    return { dayName, dateLabel, dayShort: dayShort[i], blocks };
+  });
+
+  const fmtTime = (d) => d.toLocaleTimeString([], { hour:"numeric", minute:"2-digit" });
+  const fmtHrs = (h) => Math.round(h * 1000) / 1000;
+
   return (
     <div>
       <div className="period-tabs">
@@ -997,83 +1043,63 @@ function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) 
         <div className="stat"><div className="stat-lbl">Active Staff</div><div className="stat-val">{nonAdmin.length}</div><div className="stat-sub">Employees</div></div>
         <div className="stat"><div className="stat-lbl">Overrides</div><div className="stat-val" style={{color:"var(--amber)"}}>{Object.keys(overrides).length}</div><div className="stat-sub">On record</div></div>
       </div>
-      {/* Weekly Schedule View */}
-      {nonAdmin.map(emp => {
-        const actual = getActualHours(emp.id); const ov = getOverride(emp.id);
-        const finalHrs = ov ? ov.hours : actual; const pay = finalHrs * (emp.rate||0);
-        const empLogs = clockLogs.filter(l => l.employeeId === emp.id).sort((a,b) => new Date(a.time) - new Date(b.time));
 
-        // Build daily breakdown: Mon-Sun
-        const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-        const wsDate = new Date(weekStart + "T00:00:00");
-        const dailyData = days.map((dayName, i) => {
-          const dayDate = new Date(wsDate); dayDate.setDate(wsDate.getDate() + i);
-          const dayStr = dayDate.toDateString();
-          // Find all in/out pairs for this day
-          const dayLogs = empLogs.filter(l => new Date(l.time).toDateString() === dayStr);
-          const shifts = [];
-          let curIn = null;
-          for (const l of dayLogs) {
-            if (l.type === "in") curIn = new Date(l.time);
-            else if (l.type === "out" && curIn) {
-              shifts.push({ inTime: curIn, outTime: new Date(l.time), hours: (new Date(l.time) - curIn) / 3600000 });
-              curIn = null;
-            }
-          }
-          if (curIn) shifts.push({ inTime: curIn, outTime: null, hours: 0 }); // Still clocked in
-          const totalDayHrs = shifts.reduce((s,sh) => s + sh.hours, 0);
-          const dateLabel = (dayDate.getMonth()+1) + "/" + dayDate.getDate();
-          return { dayName, dateLabel, shifts, totalDayHrs };
-        });
-
-        return (
-          <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",marginBottom:16}}>
-            {/* Employee header row */}
-            <div style={{display:"flex",alignItems:"center",padding:"14px 16px",background:"var(--bg4)",borderBottom:"1px solid var(--border)",gap:12,flexWrap:"wrap"}}>
-              <div style={{fontWeight:600,fontSize:14}}>{emp.name}</div>
-              <span className={"task-badge badge-"+emp.role}>Role {emp.role}</span>
-              <div style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--muted2)"}}>${emp.rate||0}/hr</div>
-              <div className="spacer" />
-              <div style={{display:"flex",alignItems:"center",gap:16}}>
-                <div style={{textAlign:"center"}}><div style={{fontSize:10,color:"var(--muted2)",textTransform:"uppercase"}}>Hours</div><div style={{fontFamily:"var(--mono)",fontWeight:600,fontSize:14}}>{finalHrs}h{ov && <span style={{fontSize:10,color:"var(--amber)",marginLeft:2}}>*</span>}</div></div>
-                <div style={{textAlign:"center"}}><div style={{fontSize:10,color:"var(--muted2)",textTransform:"uppercase"}}>Pay</div><div style={{fontFamily:"var(--mono)",fontWeight:600,fontSize:14,color:"var(--green)"}}>${pay.toFixed(2)}</div></div>
-                <span className="override-link" onClick={() => { setOverrideModal(emp); setOverrideHours(String(finalHrs)); setOverrideReason(ov?.reason||""); }}>{ov?"Edit Override":"Override"}</span>
-              </div>
+      {/* Employee Color Legend */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:12,marginBottom:16,padding:"10px 14px",background:"var(--bg4)",borderRadius:10,border:"1px solid var(--border)"}}>
+        {nonAdmin.map((emp, idx) => {
+          const c = empColors[idx % empColors.length];
+          return (
+            <div key={emp.id} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}} onClick={() => { setOverrideModal(emp); setOverrideHours(String(getOverride(emp.id)?.hours || getActualHours(emp.id))); setOverrideReason(getOverride(emp.id)?.reason||""); }}>
+              <div style={{width:12,height:12,borderRadius:3,background:c.bg,border:"2px solid "+c.border}} />
+              <span style={{fontSize:12,fontWeight:500,color:c.text}}>{emp.name}</span>
             </div>
-            {ov && <div style={{padding:"6px 16px",background:"rgba(245,158,11,.06)",fontSize:11,color:"var(--amber)"}}>Override: {ov.hours}h &mdash; {ov.reason}</div>}
-            {/* Weekly day grid */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderTop:"1px solid var(--border)"}}>
-              {dailyData.map((d,i) => (
-                <div key={i} style={{borderRight:i<6?"1px solid var(--border)":"none",padding:"10px 8px",minHeight:80,background:d.shifts.length>0?"rgba(22,163,74,.02)":"transparent"}}>
-                  <div style={{fontSize:11,fontWeight:600,color:d.shifts.length>0?"var(--text)":"var(--muted2)",marginBottom:2}}>{d.dayName}</div>
-                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:6}}>{d.dateLabel}</div>
-                  {d.shifts.length === 0 ? (
-                    <div style={{fontSize:10,color:"var(--muted2)",fontStyle:"italic"}}>OFF</div>
-                  ) : (
-                    d.shifts.map((sh,si) => (
-                      <div key={si} style={{marginBottom:4}}>
-                        <div style={{fontSize:11,fontWeight:500,color:"var(--green)"}}>
-                          {sh.inTime.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}
+          );
+        })}
+      </div>
+
+      {/* Calendar Weekly View */}
+      <div className="card" style={{padding:0,overflow:"hidden"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
+          {calendarDays.map((day, i) => (
+            <div key={i} style={{borderRight:i<6?"1px solid var(--border)":"none",minHeight:160}}>
+              {/* Day header */}
+              <div style={{textAlign:"center",padding:"12px 6px 8px",borderBottom:"1px solid var(--border)",background:"var(--bg4)"}}>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{day.dayName}</div>
+                <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>({day.dateLabel})</div>
+              </div>
+
+              {/* Shift blocks */}
+              <div style={{padding:"8px 6px"}}>
+                {day.blocks.length === 0 ? (
+                  <div style={{fontSize:11,color:"var(--muted2)",textAlign:"center",padding:"20px 0",fontStyle:"italic"}}>No shifts</div>
+                ) : (
+                  day.blocks.map((blk, bi) => {
+                    const c = empColors[blk.empIdx % empColors.length];
+                    return (
+                      <div key={bi} style={{
+                        background: c.bg,
+                        borderLeft: "3px solid " + c.border,
+                        borderRadius: "0 8px 8px 0",
+                        padding: "8px 8px",
+                        marginBottom: 6,
+                      }}>
+                        <div style={{fontSize:12,fontWeight:700,color:c.text,marginBottom:4}}>{blk.emp.name}</div>
+                        <div style={{fontSize:11,color:"var(--text)",fontWeight:500}}>
+                          {fmtTime(blk.inTime)} - {blk.outTime ? fmtTime(blk.outTime) : <span style={{color:"var(--amber)"}}>Active</span>}
                         </div>
-                        <div style={{fontSize:10,color:"var(--muted2)"}}>to</div>
-                        <div style={{fontSize:11,fontWeight:500,color:sh.outTime?"var(--red)":"var(--amber)"}}>
-                          {sh.outTime ? sh.outTime.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}) : "Active..."}
-                        </div>
-                        <div style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--muted)",marginTop:2}}>
-                          {sh.outTime ? (Math.round(sh.hours*10)/10)+"h" : ""}
+                        <div style={{fontSize:11,fontFamily:"var(--mono)",color:c.text,fontWeight:600,marginTop:3}}>
+                          {fmtHrs(blk.hours)} hours
                         </div>
                       </div>
-                    ))
-                  )}
-                  {d.totalDayHrs > 0 && d.shifts.length > 1 && (
-                    <div style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--text)",fontWeight:600,marginTop:4,borderTop:"1px solid var(--border)",paddingTop:4}}>{(Math.round(d.totalDayHrs*10)/10)}h total</div>
-                  )}
-                </div>
-              ))}
+                    );
+                  })
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          ))}
+        </div>
+      </div>
+
       {overrideModal && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setOverrideModal(null)}>
           <div className="modal">
