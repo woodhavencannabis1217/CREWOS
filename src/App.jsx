@@ -49,6 +49,25 @@ function calcHours(logs) {
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+// ─── FIREBASE HELPERS ───────────────────────────────────────────────────────
+async function firebasePush(dbUrl, path, data) {
+  if (!dbUrl) return null;
+  const cleanUrl = dbUrl.replace(/\/+$/, "");
+  try {
+    const res = await fetch(cleanUrl + "/" + path + ".json", { method: "POST", body: JSON.stringify(data) });
+    return await res.json();
+  } catch { return null; }
+}
+
+async function firebaseGet(dbUrl, path) {
+  if (!dbUrl) return null;
+  const cleanUrl = dbUrl.replace(/\/+$/, "");
+  try {
+    const res = await fetch(cleanUrl + "/" + path + ".json");
+    return await res.json();
+  } catch { return null; }
+}
+
 // ─── STYLES (LIGHT THEME) ───────────────────────────────────────────────────
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
@@ -1329,11 +1348,23 @@ const DEFAULT_VENDOR_FIELDS = [
 
 // ─── VENDOR FORM (standalone page vendors see after scanning QR) ─────────────
 function VendorFormPage() {
-  const [fields] = useState(() => {
+  // Read Firebase URL from hash params (e.g., #/vendor-form?fb=<encoded-url>)
+  const getFirebaseUrl = () => {
+    try {
+      const hash = window.location.hash;
+      const qIdx = hash.indexOf("?");
+      if (qIdx < 0) return "";
+      const params = new URLSearchParams(hash.slice(qIdx));
+      return decodeURIComponent(params.get("fb") || "");
+    } catch { return ""; }
+  };
+  const fbUrl = getFirebaseUrl();
+
+  // Try to load fields from Firebase first, fall back to localStorage
+  const [fields, setFields] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("crewos_vendor_fields"));
       if (!saved) return DEFAULT_VENDOR_FIELDS;
-      // Migrate: if saved fields still have old "Invoice / manifest upload" or old signature type, reset to defaults
       const hasInvoice = saved.some(f => f.name && f.name.toLowerCase().includes("invoice"));
       const hasBadSig = saved.some(f => f.name && f.name.toLowerCase().includes("signature") && !f.type.includes("Signature"));
       if (hasInvoice || hasBadSig) { localStorage.setItem("crewos_vendor_fields", JSON.stringify(DEFAULT_VENDOR_FIELDS)); return DEFAULT_VENDOR_FIELDS; }
@@ -1342,22 +1373,43 @@ function VendorFormPage() {
   });
   const [form, setForm] = useState({});
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = () => {
+  // Load fields from Firebase if available (for cross-device)
+  useEffect(() => {
+    if (!fbUrl) return;
+    (async () => {
+      const data = await firebaseGet(fbUrl, "vendor_fields");
+      if (data && Array.isArray(data)) setFields(data);
+    })();
+  }, [fbUrl]);
+
+  const submit = async () => {
+    setSubmitting(true);
     const company = form["Company / Brand name"] || "Unknown Vendor";
     const timeStr = new Date().toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
-    // Save delivery to localStorage so the admin app picks it up
+    const deliveryData = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      company, time: timeStr, timestamp: Date.now(), fields: {...form}
+    };
+
+    if (fbUrl) {
+      // Push to Firebase so all devices can see it
+      await firebasePush(fbUrl, "deliveries", deliveryData);
+      await firebasePush(fbUrl, "pending_delivery", { company, time: timeStr, id: deliveryData.id, timestamp: Date.now() });
+    }
+
+    // Also save to localStorage (works when same browser)
     try {
       const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries")) || [];
-      deliveries.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6), company, time: timeStr, fields: {...form} });
+      deliveries.unshift(deliveryData);
       localStorage.setItem("crewos_deliveries", JSON.stringify(deliveries));
-      // Add notification for admin
       const notifs = JSON.parse(localStorage.getItem("crewos_notifs")) || [];
-      notifs.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6), type:"vendor", title:"Vendor delivery: "+company, desc:"Delivery form submitted. Tasks triggered for all roles.", time: timeStr });
+      notifs.unshift({ id: uid(), type:"vendor", title:"Vendor delivery: "+company, desc:"Delivery form submitted. Tasks triggered for all roles.", time: timeStr });
       localStorage.setItem("crewos_notifs", JSON.stringify(notifs));
-      // Flag pending delivery so employee task view picks it up
-      localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: Date.now().toString(36) }));
+      localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: deliveryData.id }));
     } catch {}
+    setSubmitting(false);
     setSubmitted(true);
   };
 
@@ -1406,8 +1458,8 @@ function VendorFormPage() {
                 )}
               </div>
             ))}
-            <button className="btn primary" style={{width:"100%",padding:14,fontSize:15,marginTop:8}} onClick={submit} disabled={!allRequiredFilled}>
-              Submit Delivery
+            <button className="btn primary" style={{width:"100%",padding:14,fontSize:15,marginTop:8}} onClick={submit} disabled={!allRequiredFilled || submitting}>
+              {submitting ? "Submitting..." : "Submit Delivery"}
             </button>
           </div>
           <div style={{textAlign:"center",marginTop:16,fontSize:11,color:"var(--muted)"}}>Powered by CrewOS</div>
@@ -1418,7 +1470,7 @@ function VendorFormPage() {
 }
 
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
-function AdminVendor({ notifications, setNotifications, toast }) {
+function AdminVendor({ notifications, setNotifications, toast, settings }) {
   const [fields, setFields] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("crewos_vendor_fields"));
@@ -1449,12 +1501,23 @@ function AdminVendor({ notifications, setNotifications, toast }) {
     return () => clearInterval(iv);
   }, [deliveryLog.length, notifications.length]);
 
-  // Build the QR code URL pointing to the vendor form
-  const vendorFormUrl = window.location.origin + window.location.pathname + "#/vendor-form";
+  // Build the QR code URL pointing to the vendor form (include Firebase URL if configured)
+  const fbUrl = settings.firebaseUrl || "";
+  const vendorFormBase = window.location.origin + window.location.pathname + "#/vendor-form";
+  const vendorFormUrl = fbUrl ? vendorFormBase + "?fb=" + encodeURIComponent(fbUrl) : vendorFormBase;
 
   const openVendorForm = () => {
-    window.open(window.location.pathname + "#/vendor-form", "_blank");
+    const base = window.location.pathname + "#/vendor-form";
+    window.open(fbUrl ? base + "?fb=" + encodeURIComponent(fbUrl) : base, "_blank");
   };
+
+  // Save vendor form fields to Firebase so the phone can load them
+  useEffect(() => {
+    if (fbUrl && fields.length > 0) {
+      const cleanUrl = fbUrl.replace(/\/+$/, "");
+      fetch(cleanUrl + "/vendor_fields.json", { method: "PUT", body: JSON.stringify(fields) }).catch(() => {});
+    }
+  }, [fields, fbUrl]);
 
   return (
     <div>
@@ -1683,6 +1746,27 @@ function AdminSettings({ settings, setSettings }) {
             <div className={"toggle"+(settings[key]?" on":"")} onClick={() => setSettings(s=>({...s,[key]:!s[key]}))}><div className="toggle-knob" /></div>
           </div>
         ))}
+      </div>
+
+      <div className="sec-head">Cloud Sync (Firebase)</div>
+      <div className="card">
+        <div className="setting-row" style={{flexDirection:"column",alignItems:"stretch",gap:10}}>
+          <div>
+            <div className="setting-label">Firebase Realtime Database URL</div>
+            <div className="setting-sub">Required for vendor form to work from other devices (phones). Create a free Firebase project, enable Realtime Database, and paste the URL here.</div>
+          </div>
+          <input type="text" value={settings.firebaseUrl || ""} onChange={e => setSettings(s=>({...s,firebaseUrl:e.target.value.trim()}))} placeholder="https://your-project.firebaseio.com" />
+          {settings.firebaseUrl && (
+            <div style={{fontSize:11,color:"var(--green)",background:"rgba(22,163,74,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(22,163,74,.15)"}}>
+              &#10003; Firebase connected. Vendor QR code will include this URL so forms submitted from phones sync to this device.
+            </div>
+          )}
+          {!settings.firebaseUrl && (
+            <div style={{fontSize:11,color:"var(--amber)",background:"rgba(217,119,6,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(217,119,6,.15)",lineHeight:1.6}}>
+              <strong>Without Firebase:</strong> Vendor forms submitted from other devices (phones) won&apos;t trigger employee tasks. Only forms submitted on this same browser will work.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2092,7 +2176,7 @@ export default function App() {
       { id:"n2", type:"late", title:"Late clock-in: Marco", desc:"Marco clocked in 13 min late. Threshold: 5 min.", time:"Today 9:18 AM" },
     ]; } catch { return []; }
   });
-  const [settings, setSettings] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_settings")) || { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"" }; } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"" }; } });
+  const [settings, setSettings] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_settings")) || { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; } });
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
 
@@ -2106,6 +2190,69 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_settings", JSON.stringify(settings)); }, [settings]);
   useEffect(() => { localStorage.setItem("crewos_drawer", JSON.stringify(drawerLogs)); }, [drawerLogs]);
   useEffect(() => { localStorage.setItem("crewos_shiftnotes", JSON.stringify(shiftNotes)); }, [shiftNotes]);
+
+  // ─── FIREBASE POLLING: detect vendor deliveries from cloud ──────────────
+  const [fbSeenIds] = useState(() => new Set());
+  const [fbStartTime] = useState(() => Date.now());
+
+  useEffect(() => {
+    const fbUrl = settings.firebaseUrl;
+    if (!fbUrl) return;
+
+    const poll = async () => {
+      // Poll for new deliveries
+      const data = await firebaseGet(fbUrl, "deliveries");
+      if (data && typeof data === "object") {
+        Object.entries(data).forEach(([firebaseKey, delivery]) => {
+          if (fbSeenIds.has(firebaseKey)) return;
+          fbSeenIds.add(firebaseKey);
+          if (delivery.timestamp && delivery.timestamp > fbStartTime) {
+            const company = delivery.company || "Unknown Vendor";
+            const timeStr = delivery.time || new Date().toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+            toast.show("\uD83D\uDCE6 Vendor delivery: " + company);
+            setNotifications(prev => [{
+              id: uid(), type: "vendor",
+              title: "Vendor delivery: " + company,
+              desc: "Delivery form submitted. Tasks triggered for all roles.",
+              time: timeStr,
+            }, ...prev]);
+            // Also add to local delivery log
+            try {
+              const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries")) || [];
+              if (!deliveries.some(d => d.id === delivery.id)) {
+                deliveries.unshift(delivery);
+                localStorage.setItem("crewos_deliveries", JSON.stringify(deliveries));
+              }
+            } catch {}
+            // Set pending delivery to trigger employee tasks
+            localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: delivery.id || uid() }));
+          }
+        });
+      }
+
+      // Also poll for pending_delivery flag (in case delivery was pushed directly)
+      const pending = await firebaseGet(fbUrl, "pending_delivery");
+      if (pending && typeof pending === "object") {
+        // Get the most recent pending delivery
+        const entries = Object.entries(pending);
+        const recent = entries.filter(([, v]) => v.timestamp && v.timestamp > fbStartTime);
+        if (recent.length > 0) {
+          const [latestKey, latest] = recent.sort((a, b) => b[1].timestamp - a[1].timestamp)[0];
+          if (!fbSeenIds.has("pd_" + latestKey)) {
+            fbSeenIds.add("pd_" + latestKey);
+            const existing = localStorage.getItem("crewos_pending_delivery");
+            if (!existing || !JSON.parse(existing).id || JSON.parse(existing).id !== latest.id) {
+              localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company: latest.company, time: latest.time, id: latest.id || uid() }));
+            }
+          }
+        }
+      }
+    };
+
+    poll();
+    const iv = setInterval(poll, 5000);
+    return () => clearInterval(iv);
+  }, [settings.firebaseUrl]);
 
   // Live clock
   const [liveTime, setLiveTime] = useState("");
@@ -2135,7 +2282,7 @@ export default function App() {
   const [geoChecking, setGeoChecking] = useState(false);
 
   // Hash routing: if #/vendor-form, show the vendor form page (must be after all hooks)
-  if (hash === "#/vendor-form") return <VendorFormPage />;
+  if (hash.startsWith("#/vendor-form")) return <VendorFormPage />;
 
   const doClockIn = () => {
     // Clock in immediately
@@ -2292,7 +2439,7 @@ export default function App() {
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} toast={toast} />}
-          {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} />}
+          {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} />}
