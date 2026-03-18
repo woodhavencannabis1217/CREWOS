@@ -1876,6 +1876,7 @@ function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, on
 
 // ─── EMPLOYEE: MY TASKS ──────────────────────────────────────────────────────
 function EmpTasks({ employee, tasks, schedule }) {
+  const [activeSection, setActiveSection] = useState("daily");
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
   const [now, setNow] = useState(new Date());
@@ -1891,7 +1892,10 @@ function EmpTasks({ employee, tasks, schedule }) {
       setNow(new Date());
       try {
         const pd = JSON.parse(localStorage.getItem("crewos_pending_delivery"));
-        if (pd && !pendingDelivery) setPendingDelivery(pd);
+        if (pd && !pendingDelivery) {
+          setPendingDelivery(pd);
+          setActiveSection("delivery"); // Auto-switch to delivery tab
+        }
       } catch {}
     }, 2000);
     return () => clearInterval(iv);
@@ -2009,11 +2013,13 @@ function EmpTasks({ employee, tasks, schedule }) {
     const st = getState(t.id);
     const locked = idx > 0 && getState(group[idx - 1].id).status !== "done";
     const pct = st.started && t.duration > 0 ? Math.max(0, Math.min(100, 100 - (st.remaining / (t.duration * 60)) * 100)) : 0;
+    const isDelivery = t.category === "delivery";
     return (
       <div className={"task-card" + (st.status === "running" ? " active-task" : "") + (st.status === "done" ? " done-task" : "")} key={t.id} style={locked ? {opacity:.35} : {}}>
         <div className="task-hdr">
           <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",marginRight:4}}>#{idx + 1}</span>
           <div className="task-name">{st.status === "done" && <span style={{color:"var(--green)",marginRight:6}}>&#10003;</span>}{t.title}</div>
+          {isDelivery && <span className={"task-badge badge-"+(t.role==="A"?"A":"B")} style={{fontSize:9}}>Role {t.role}</span>}
           {st.status === "done" && <span className="task-badge" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>Done</span>}
           {st.status === "running" && <span className="timer-display">{formatTime(st.remaining)}</span>}
           {st.status === "prompt" && <span className="timer-display timer-alert">Time's up!</span>}
@@ -2029,76 +2035,135 @@ function EmpTasks({ employee, tasks, schedule }) {
     );
   };
 
+  // Separate progress counts
+  const dailyCompleted = allActiveDailyTasks.filter(t => getState(t.id).status === "done").length;
+  const deliveryCompleted = myDeliveryTasks.filter(t => getState(t.id).status === "done").length;
+
+  // Check if the completeModal task is a delivery task
+  const isModalDelivery = completeModal && completeModal.category === "delivery";
+
   return (
     <div>
-      {/* Progress bar */}
-      <div style={{marginBottom:16}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{fontSize:13,fontWeight:500}}>{completedCount}/{allVisibleTasks.length} completed</span>
-          <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(allVisibleTasks.length > 0 ? (completedCount / allVisibleTasks.length) * 100 : 0) + "%",background:"var(--green)",borderRadius:2,transition:"width .3s"}} /></div>
+      {/* Section Tabs */}
+      <div className="period-tabs" style={{marginBottom:16}}>
+        <div className={"period-tab" + (activeSection === "daily" ? " on" : "")} onClick={() => setActiveSection("daily")}
+          style={{position:"relative"}}>
+          &#128197; Daily Tasks
+          {allActiveDailyTasks.length > 0 && <span style={{marginLeft:6,fontSize:10,fontFamily:"var(--mono)"}}>{dailyCompleted}/{allActiveDailyTasks.length}</span>}
+        </div>
+        <div className={"period-tab" + (activeSection === "delivery" ? " on" : "")} onClick={() => setActiveSection("delivery")}
+          style={{position:"relative"}}>
+          &#128666; Delivery Tasks
+          {pendingDelivery && !deliveryTasksDone && myDeliveryTasks.length > 0 && (
+            <span style={{marginLeft:6,fontSize:10,fontFamily:"var(--mono)"}}>{deliveryCompleted}/{myDeliveryTasks.length}</span>
+          )}
+          {pendingDelivery && !deliveryTasksDone && (
+            <span style={{position:"absolute",top:-4,right:-4,width:8,height:8,borderRadius:"50%",background:"var(--red)"}} />
+          )}
         </div>
       </div>
 
-      {/* Daily Tasks by time slot */}
-      {activeSlots.length === 0 && myDeliveryTasks.length === 0 && (
-        <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>
-          No tasks active right now.
-          {futureSlots.length > 0 && <div style={{marginTop:8,fontSize:12}}>Next tasks at {formatSlotTime(futureSlots[0])}</div>}
-        </div>
-      )}
-
-      {activeSlots.map(slot => {
-        const slotTasks = dailyByTime[slot];
-        const slotDone = slotTasks.every(t => getState(t.id).status === "done");
-        return (
-          <div key={slot} style={{marginBottom:20}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-              <div style={{fontSize:14,fontWeight:600,color:slotDone ? "var(--green)" : "var(--text)"}}>
-                {slotDone ? "\u2713 " : ""}&#9200; {formatSlotTime(slot)}
+      {/* ═══ DAILY TASKS SECTION ═══ */}
+      {activeSection === "daily" && (
+        <div>
+          {/* Progress bar */}
+          {allActiveDailyTasks.length > 0 && (
+            <div style={{marginBottom:16}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <span style={{fontSize:13,fontWeight:500}}>{dailyCompleted}/{allActiveDailyTasks.length} completed</span>
+                <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(allActiveDailyTasks.length > 0 ? (dailyCompleted / allActiveDailyTasks.length) * 100 : 0) + "%",background:"var(--green)",borderRadius:2,transition:"width .3s"}} /></div>
               </div>
-              <div style={{flex:1,height:1,background:"var(--border)"}} />
-              <span style={{fontSize:11,color:"var(--muted2)"}}>
-                {slotTasks.filter(t => getState(t.id).status === "done").length}/{slotTasks.length} done
-              </span>
             </div>
-            {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks))}
-          </div>
-        );
-      })}
+          )}
 
-      {/* Future slots preview */}
-      {futureSlots.length > 0 && activeSlots.length > 0 && (
-        <div style={{marginTop:10,marginBottom:20}}>
-          <div style={{fontSize:12,color:"var(--muted2)",fontStyle:"italic",textAlign:"center",padding:"10px 0",background:"var(--bg4)",borderRadius:10,border:"1px solid var(--border)"}}>
-            Upcoming: {futureSlots.map(s => formatSlotTime(s)).join(", ")}
-          </div>
-        </div>
-      )}
+          {activeSlots.length === 0 && (
+            <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>
+              No daily tasks active right now.
+              {futureSlots.length > 0 && <div style={{marginTop:8,fontSize:12}}>Next tasks at {formatSlotTime(futureSlots[0])}</div>}
+            </div>
+          )}
 
-      {/* Delivery Tasks Section */}
-      {pendingDelivery && !deliveryTasksDone && (
-        <div style={{marginTop:20}}>
-          <div style={{background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:14,padding:16,marginBottom:14}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-              <span style={{fontSize:18}}>&#128666;</span>
-              <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Vendor Delivery</div>
-              <div className="spacer" />
-              <span className={"task-badge badge-"+(myDeliveryRole==="A"?"A":"B")}>You: Role {myDeliveryRole}</span>
-            </div>
-            <div style={{fontSize:12,color:"var(--muted2)"}}>
-              {pendingDelivery.company} &middot; {pendingDelivery.time}
-            </div>
-          </div>
-          {myDeliveryRole ? (
-            myDeliveryTasks.map((t, idx) => renderTaskCard(t, idx, myDeliveryTasks))
-          ) : (
-            <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
-              No delivery role assigned to you for today. Ask your admin to assign a delivery role in the schedule.
+          {activeSlots.map(slot => {
+            const slotTasks = dailyByTime[slot];
+            const slotDone = slotTasks.every(t => getState(t.id).status === "done");
+            return (
+              <div key={slot} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{fontSize:14,fontWeight:600,color:slotDone ? "var(--green)" : "var(--text)"}}>
+                    {slotDone ? "\u2713 " : ""}&#9200; {formatSlotTime(slot)}
+                  </div>
+                  <div style={{flex:1,height:1,background:"var(--border)"}} />
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>
+                    {slotTasks.filter(t => getState(t.id).status === "done").length}/{slotTasks.length} done
+                  </span>
+                </div>
+                {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks))}
+              </div>
+            );
+          })}
+
+          {/* Future slots preview */}
+          {futureSlots.length > 0 && activeSlots.length > 0 && (
+            <div style={{marginTop:10,marginBottom:20}}>
+              <div style={{fontSize:12,color:"var(--muted2)",fontStyle:"italic",textAlign:"center",padding:"10px 0",background:"var(--bg4)",borderRadius:10,border:"1px solid var(--border)"}}>
+                Upcoming: {futureSlots.map(s => formatSlotTime(s)).join(", ")}
+              </div>
             </div>
           )}
         </div>
       )}
 
+      {/* ═══ DELIVERY TASKS SECTION ═══ */}
+      {activeSection === "delivery" && (
+        <div>
+          {pendingDelivery && !deliveryTasksDone ? (
+            <>
+              <div style={{background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:14,padding:16,marginBottom:14}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                  <span style={{fontSize:18}}>&#128666;</span>
+                  <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Vendor Delivery</div>
+                  <div className="spacer" />
+                  {myDeliveryRole && <span className={"task-badge badge-"+(myDeliveryRole==="A"?"A":"B")}>You: Role {myDeliveryRole}</span>}
+                </div>
+                <div style={{fontSize:12,color:"var(--muted2)"}}>
+                  {pendingDelivery.company} &middot; {pendingDelivery.time}
+                </div>
+              </div>
+
+              {myDeliveryRole && myDeliveryTasks.length > 0 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                    <span style={{fontSize:13,fontWeight:500}}>{deliveryCompleted}/{myDeliveryTasks.length} completed</span>
+                    <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(myDeliveryTasks.length > 0 ? (deliveryCompleted / myDeliveryTasks.length) * 100 : 0) + "%",background:"var(--purple)",borderRadius:2,transition:"width .3s"}} /></div>
+                  </div>
+                </div>
+              )}
+
+              {myDeliveryRole ? (
+                myDeliveryTasks.map((t, idx) => renderTaskCard(t, idx, myDeliveryTasks))
+              ) : (
+                <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
+                  No delivery role assigned to you for today. Ask your admin to assign a delivery role in the schedule.
+                </div>
+              )}
+            </>
+          ) : deliveryTasksDone ? (
+            <div style={{textAlign:"center",padding:"40px 0"}}>
+              <div style={{fontSize:48,marginBottom:12}}>&#10003;</div>
+              <div style={{fontSize:16,fontWeight:600,color:"var(--green)",marginBottom:6}}>All Delivery Tasks Complete!</div>
+              <div style={{fontSize:13,color:"var(--muted2)"}}>Great job processing the delivery.</div>
+            </div>
+          ) : (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted2)",fontSize:13}}>
+              <div style={{fontSize:36,marginBottom:12,opacity:.4}}>&#128666;</div>
+              No pending deliveries right now.<br/>
+              <span style={{fontSize:12}}>Tasks will appear here when a vendor checks in.</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Complete Modal — different time options for daily vs delivery */}
       {completeModal && (
         <div className="modal-overlay">
           <div className="modal" style={{textAlign:"center"}}>
@@ -2107,7 +2172,11 @@ function EmpTasks({ employee, tasks, schedule }) {
             <div style={{fontSize:14,color:"var(--muted3)",marginBottom:18}}>Did you complete this task?</div>
             <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14}} onClick={() => markDone(completeModal.id)}>&#10003; Yes, task complete</button>
             <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
-            <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
+            {isModalDelivery ? (
+              <div className="complete-options">{[5,15,30].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
+            ) : (
+              <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
+            )}
           </div>
         </div>
       )}
