@@ -966,11 +966,12 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
 }
 
 // ─── ADMIN: PAYROLL ──────────────────────────────────────────────────────────
-function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) {
+function AdminPayroll({ employees, setEmployees, clockLogs, overrides, setOverrides, toast }) {
   const [period, setPeriod] = useState("weekly");
   const [overrideModal, setOverrideModal] = useState(null);
   const [overrideHours, setOverrideHours] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
+  const [showTaxBreakdown, setShowTaxBreakdown] = useState({});
   const nonAdmin = employees.filter(e => e.role !== "admin");
   const weekStart = getWeekStart();
   const getActualHours = (empId) => calcHours(clockLogs.filter(l => l.employeeId === empId));
@@ -1100,37 +1101,193 @@ function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) 
         </div>
       </div>
 
-      {/* Employee Summary Table */}
-      <div className="card" style={{padding:0,overflow:"hidden",marginTop:16}}>
-        <table className="pay-tbl">
-          <thead><tr><th></th><th>Employee</th><th>Role</th><th>Rate</th><th>Hours</th><th>Pay</th><th>Override</th></tr></thead>
-          <tbody>
-            {nonAdmin.map((emp, idx) => {
-              const c = empColors[idx % empColors.length];
-              const actual = getActualHours(emp.id); const ov = getOverride(emp.id);
-              const finalHrs = ov ? ov.hours : actual; const pay = finalHrs * (emp.rate||0);
-              return (
-                <tr key={emp.id}>
-                  <td><div style={{width:10,height:10,borderRadius:3,background:c.bg,border:"2px solid "+c.border}} /></td>
-                  <td style={{fontWeight:600}}>{emp.name}</td>
-                  <td><span className={"task-badge badge-"+emp.role}>Role {emp.role}</span></td>
-                  <td style={{fontFamily:"var(--mono)",fontSize:12}}>${emp.rate||0}/hr</td>
-                  <td style={{fontFamily:"var(--mono)",fontWeight:600}}>{finalHrs}h{ov && <span style={{fontSize:10,color:"var(--amber)",marginLeft:2}}>*</span>}</td>
-                  <td style={{fontFamily:"var(--mono)",color:"var(--green)",fontWeight:600}}>${pay.toFixed(2)}</td>
-                  <td><span className="override-link" onClick={() => { setOverrideModal(emp); setOverrideHours(String(finalHrs)); setOverrideReason(ov?.reason||""); }}>{ov?"Edit":"Override"}</span></td>
-                </tr>
-              );
-            })}
-            <tr style={{background:"var(--bg4)",fontWeight:700}}>
-              <td></td>
-              <td colSpan={3}>Total</td>
-              <td style={{fontFamily:"var(--mono)"}}>{Math.round(totalHours*10)/10}h</td>
-              <td style={{fontFamily:"var(--mono)",color:"var(--green)"}}>${totalPay.toFixed(2)}</td>
-              <td></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      {/* ═══ WEEKLY PAY SUMMARY ═══ */}
+      {(() => {
+        // Tax calculation helper (2025 IRS/NYS weekly estimates)
+        const calcTaxes = (gross, filing) => {
+          const annual = gross * 52;
+          // Federal income tax (2025 brackets, simplified weekly)
+          let fedTax = 0;
+          if (filing === "HoH") {
+            if (annual <= 16550) fedTax = annual * 0.10;
+            else if (annual <= 63100) fedTax = 1655 + (annual - 16550) * 0.12;
+            else if (annual <= 100500) fedTax = 7240.60 + (annual - 63100) * 0.22;
+            else if (annual <= 191950) fedTax = 15468.60 + (annual - 100500) * 0.24;
+            else fedTax = 37416.60 + (annual - 191950) * 0.32;
+          } else if (filing === "MFJ") {
+            if (annual <= 23200) fedTax = annual * 0.10;
+            else if (annual <= 94300) fedTax = 2320 + (annual - 23200) * 0.12;
+            else if (annual <= 201050) fedTax = 10852 + (annual - 94300) * 0.22;
+            else fedTax = 34337 + (annual - 201050) * 0.24;
+          } else {
+            // Single / MFS
+            if (annual <= 11600) fedTax = annual * 0.10;
+            else if (annual <= 47150) fedTax = 1160 + (annual - 11600) * 0.12;
+            else if (annual <= 100525) fedTax = 5426 + (annual - 47150) * 0.22;
+            else if (annual <= 191950) fedTax = 17168.50 + (annual - 100525) * 0.24;
+            else fedTax = 39110.50 + (annual - 191950) * 0.32;
+          }
+          fedTax = fedTax / 52;
+
+          // NYS income tax (2025 brackets, simplified weekly)
+          let nyTax = 0;
+          if (annual <= 8500) nyTax = annual * 0.04;
+          else if (annual <= 11700) nyTax = 340 + (annual - 8500) * 0.045;
+          else if (annual <= 13900) nyTax = 484 + (annual - 11700) * 0.0525;
+          else if (annual <= 80650) nyTax = 600 + (annual - 13900) * 0.0585;
+          else if (annual <= 215400) nyTax = 4504.89 + (annual - 80650) * 0.0625;
+          else nyTax = 12921.78 + (annual - 215400) * 0.0685;
+          nyTax = nyTax / 52;
+
+          const ss = gross * 0.062; // Social Security 6.2%
+          const medicare = gross * 0.0145; // Medicare 1.45%
+          const nySdi = Math.min(gross * 0.005, 0.60 * 7 / 52); // NY SDI ~0.5% capped
+          const nyPfl = gross * 0.00455; // NY PFL 0.455%
+          const empTaxes = fedTax + nyTax + ss + medicare + nySdi + nyPfl;
+          const employerSs = gross * 0.062;
+          const employerMedicare = gross * 0.0145;
+          const employerTaxes = employerSs + employerMedicare;
+          return { fedTax, nyTax, ss, medicare, nySdi, nyPfl, empTaxes, employerSs, employerMedicare, employerTaxes, net: gross - empTaxes, totalCost: gross + employerTaxes };
+        };
+
+        // Count days worked
+        const countDays = (empId) => {
+          const empLogs = clockLogs.filter(l => l.employeeId === empId);
+          const daySet = new Set();
+          empLogs.forEach(l => daySet.add(new Date(l.time).toDateString()));
+          return daySet.size;
+        };
+
+        // Compute per-employee
+        const payData = nonAdmin.map((emp, idx) => {
+          const ov = getOverride(emp.id);
+          const hrs = ov ? ov.hours : getActualHours(emp.id);
+          const gross = hrs * (emp.rate || 0);
+          const filing = emp.filingStatus || "Single/MFS";
+          const taxes = calcTaxes(gross, filing === "Single/MFS" ? "S" : filing === "HoH" ? "HoH" : "MFJ");
+          const days = countDays(emp.id);
+          return { emp, idx, hrs, gross, filing, taxes, days };
+        });
+
+        const totGross = payData.reduce((s, d) => s + d.gross, 0);
+        const totEmpTax = payData.reduce((s, d) => s + d.taxes.empTaxes, 0);
+        const totNet = payData.reduce((s, d) => s + d.taxes.net, 0);
+        const totErTax = payData.reduce((s, d) => s + d.taxes.employerTaxes, 0);
+        const totCost = payData.reduce((s, d) => s + d.taxes.totalCost, 0);
+
+        return (
+          <>
+            <div style={{marginTop:24,marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:18,fontWeight:700}}>Weekly Pay Summary</div>
+              <span style={{fontSize:11,padding:"3px 10px",border:"1px solid var(--border)",borderRadius:20,color:"var(--muted2)"}}>With Tax Estimates</span>
+            </div>
+
+            <div style={{background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.3)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"var(--amber)"}}>
+              \u26A0 Tax withholding amounts are <strong>estimates</strong> based on 2025 IRS/NYS brackets and weekly pay frequency. Actual payroll taxes through iSolved may differ slightly. Flat-rate taxes (SS, Medicare, SDI, PFL) are exact.
+            </div>
+
+            {/* Employee Pay Cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:14,marginBottom:20}}>
+              {payData.map(({ emp, idx, hrs, gross, filing, taxes, days }) => {
+                const c = empColors[idx % empColors.length];
+                const showTax = showTaxBreakdown[emp.id];
+                return (
+                  <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:"4px solid "+c.border}}>
+                    <div style={{padding:"14px 16px"}}>
+                      <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                        <span style={{fontSize:16,fontWeight:700,color:c.text}}>{emp.name}</span>
+                        <span style={{fontSize:12,color:"var(--muted2)"}}>({filing})</span>
+                      </div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:16,fontSize:13,marginBottom:8}}>
+                        <div>Hours: <strong>{hrs}</strong></div>
+                        <div>Days: <strong>{days}</strong></div>
+                        <div>Rate: <strong>${(emp.rate||0).toFixed(2)}/hr</strong></div>
+                        <div>Gross: <strong style={{color:"var(--text)"}}>${gross.toFixed(2)}</strong></div>
+                      </div>
+                      <div style={{cursor:"pointer",fontSize:12,color:"#3b82f6",marginBottom:showTax?8:0}} onClick={() => setShowTaxBreakdown(p => ({...p, [emp.id]:!p[emp.id]}))}>
+                        {showTax ? "\u25B2" : "\u25BC"} {showTax ? "Hide" : "Show"} tax breakdown
+                      </div>
+                      {showTax && (
+                        <div style={{fontSize:12,color:"var(--muted2)",padding:"8px 0",lineHeight:1.8}}>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>Federal Income Tax</span><span style={{fontFamily:"var(--mono)"}}>${taxes.fedTax.toFixed(2)}</span></div>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>NY State Income Tax</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nyTax.toFixed(2)}</span></div>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>Social Security (6.2%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.ss.toFixed(2)}</span></div>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>Medicare (1.45%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.medicare.toFixed(2)}</span></div>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>NY SDI</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nySdi.toFixed(2)}</span></div>
+                          <div style={{display:"flex",justifyContent:"space-between"}}><span>NY PFL (0.455%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nyPfl.toFixed(2)}</span></div>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{borderTop:"1px solid var(--border)",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",background:"var(--bg4)"}}>
+                      <div><span style={{fontSize:13}}>Net Pay: </span><strong style={{fontSize:16,color:"var(--green)"}}>${taxes.net.toFixed(2)}</strong></div>
+                      <div><span style={{fontSize:11,color:"var(--red)"}}>Total Cost: ${taxes.totalCost.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Totals Bar */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:24}}>
+              {[
+                { label:"Total Gross Wages", val:"$"+totGross.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Employee Taxes", val:"$"+totEmpTax.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Net Pay", val:"$"+totNet.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Employer Taxes", val:"$"+totErTax.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Payroll Cost", val:"$"+totCost.toFixed(2), bg:"#166534", color:"#fff" },
+              ].map((t,i) => (
+                <div key={i} style={{background:t.bg,color:t.color,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:11,opacity:.8,marginBottom:4}}>{t.label}</div>
+                  <div style={{fontSize:18,fontWeight:700}}>{t.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Employee Settings */}
+            <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:16,fontWeight:700}}>Employee Settings</div>
+              <span style={{fontSize:11,padding:"3px 10px",border:"1px solid var(--border)",borderRadius:20,color:"var(--muted2)"}}>Pay Rate + Tax Profile</span>
+            </div>
+            <div className="card" style={{padding:0,overflow:"hidden"}}>
+              <table className="pay-tbl">
+                <thead style={{background:"#2d3a8c"}}><tr>
+                  <th style={{color:"#fff"}}>Employee</th>
+                  <th style={{color:"#fff"}}>Hourly Rate</th>
+                  <th style={{color:"#fff"}}>Federal Filing Status</th>
+                </tr></thead>
+                <tbody>
+                  {nonAdmin.map((emp, idx) => {
+                    const c = empColors[idx % empColors.length];
+                    return (
+                      <tr key={emp.id}>
+                        <td style={{fontWeight:600,color:c.text}}>{emp.name}</td>
+                        <td>
+                          <div style={{display:"flex",alignItems:"center",gap:4}}>
+                            <span style={{color:"var(--muted2)"}}>$</span>
+                            <input type="number" step="0.50" min="0" value={emp.rate||0} onChange={e => {
+                              const newRate = parseFloat(e.target.value)||0;
+                              setEmployees(prev => prev.map(x => x.id === emp.id ? {...x, rate: newRate} : x));
+                            }} style={{width:70,padding:"6px 8px",border:"1px solid var(--border)",borderRadius:6,fontFamily:"var(--mono)",fontSize:13}} />
+                          </div>
+                        </td>
+                        <td>
+                          <select value={emp.filingStatus||"Single/MFS"} onChange={e => {
+                            setEmployees(prev => prev.map(x => x.id === emp.id ? {...x, filingStatus: e.target.value} : x));
+                          }} style={{padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,fontSize:12,background:"#fff",minWidth:200}}>
+                            <option value="Single/MFS">Single / Married Filing Separately</option>
+                            <option value="MFJ">Married Filing Jointly</option>
+                            <option value="HoH">Head of Household</option>
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        );
+      })()}
 
       {overrideModal && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setOverrideModal(null)}>
@@ -2974,7 +3131,7 @@ export default function App() {
         <div className="body">
           {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
-          {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
+          {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} toast={toast} />}
           {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
