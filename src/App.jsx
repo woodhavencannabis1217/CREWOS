@@ -1038,7 +1038,7 @@ function AdminTasks({ tasks, setTasks, toast }) {
   const [activeTab, setActiveTab] = useState("daily");
   const [showModal, setShowModal] = useState(false);
   const [editTask, setEditTask] = useState(null);
-  const [form, setForm] = useState({ category:"daily", title:"", desc:"", duration:5, scheduledTime:"09:05", frequency:1, order:1, role:"A" });
+  const [form, setForm] = useState({ category:"daily", title:"", desc:"", duration:5, scheduledTime:"09:05", frequency:1, order:1, role:"A", requirePhoto:false });
 
   const dailyTasks = tasks.filter(t => t.category === "daily");
   const deliveryTasks = tasks.filter(t => t.category === "delivery");
@@ -1120,6 +1120,7 @@ function AdminTasks({ tasks, setTasks, toast }) {
             <div className="task-name" style={{fontSize:13}}>{t.title}</div>
             {t.category === "delivery" && <span className={"task-badge badge-"+(t.role==="A"?"A":"B")}>Role {t.role}</span>}
             {t.category === "daily" && <span className="task-badge badge-all">All Staff</span>}
+            {t.requirePhoto && <span style={{fontSize:12}} title="Requires photo">&#128247;</span>}
           </div>
           {t.desc && <div className="task-meta">{t.desc}</div>}
           <div className="task-footer">
@@ -1134,11 +1135,32 @@ function AdminTasks({ tasks, setTasks, toast }) {
     </div>
   );
 
+  // Task status monitoring — read task logs from localStorage
+  const [taskLogs, setTaskLogs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_task_logs")) || []; } catch { return []; }
+  });
+  const [taskPhotos, setTaskPhotos] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_task_photos")) || {}; } catch { return {}; }
+  });
+  const [photoModal, setPhotoModal] = useState(null);
+
+  // Poll for updates
+  useEffect(() => {
+    const iv = setInterval(() => {
+      try {
+        setTaskLogs(JSON.parse(localStorage.getItem("crewos_task_logs")) || []);
+        setTaskPhotos(JSON.parse(localStorage.getItem("crewos_task_photos")) || {});
+      } catch {}
+    }, 3000);
+    return () => clearInterval(iv);
+  }, []);
+
   return (
     <div>
       <div className="period-tabs" style={{marginBottom:18}}>
         <div className={"period-tab"+(activeTab==="daily"?" on":"")} onClick={() => setActiveTab("daily")}>Daily Tasks ({dailyTasks.length})</div>
         <div className={"period-tab"+(activeTab==="delivery"?" on":"")} onClick={() => setActiveTab("delivery")}>Delivery Tasks ({deliveryTasks.length})</div>
+        <div className={"period-tab"+(activeTab==="status"?" on":"")} onClick={() => setActiveTab("status")}>&#128202; Task Status</div>
       </div>
 
       {activeTab === "daily" && (
@@ -1192,6 +1214,79 @@ function AdminTasks({ tasks, setTasks, toast }) {
         </div>
       )}
 
+      {/* ═══ TASK STATUS TAB ═══ */}
+      {activeTab === "status" && (
+        <div>
+          <div style={{fontSize:12,color:"var(--muted2)",marginBottom:14}}>View employee task completion status and uploaded photos.</div>
+          {taskLogs.length === 0 ? (
+            <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>
+              No task activity yet today. Logs appear when employees start and complete tasks.
+            </div>
+          ) : (
+            <div>
+              {(() => {
+                const today = new Date().toLocaleDateString("en-US", {month:"short",day:"numeric",year:"numeric"});
+                const todayLogs = taskLogs.filter(l => {
+                  try { return new Date(l.timestamp).toLocaleDateString("en-US", {month:"short",day:"numeric",year:"numeric"}) === today; } catch { return false; }
+                });
+                const byEmployee = {};
+                todayLogs.forEach(l => {
+                  const key = l.employeeName || "Unknown";
+                  if (!byEmployee[key]) byEmployee[key] = [];
+                  byEmployee[key].push(l);
+                });
+                if (Object.keys(byEmployee).length === 0) {
+                  return <div style={{color:"var(--muted2)",fontSize:13,padding:"30px 0",textAlign:"center"}}>No task activity today.</div>;
+                }
+                return Object.entries(byEmployee).map(([empName, logs]) => (
+                  <div key={empName} style={{marginBottom:20}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                      <div style={{width:30,height:30,borderRadius:"50%",background:"var(--primary)",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:600}}>{empName[0]}</div>
+                      <div style={{fontSize:14,fontWeight:600}}>{empName}</div>
+                      <div style={{flex:1,height:1,background:"var(--border)"}} />
+                      <span style={{fontSize:11,color:"var(--muted2)"}}>{logs.filter(l=>l.status==="done").length} completed</span>
+                    </div>
+                    {logs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).map((log, i) => {
+                      const photoKey = log.taskKey || log.taskId;
+                      const photos = taskPhotos[photoKey] || [];
+                      return (
+                        <div key={i} className="task-card" style={{marginBottom:8}}>
+                          <div className="task-hdr">
+                            <span style={{fontSize:13}}>{log.status === "done" ? "\u2705" : log.status === "running" ? "\u23F1\uFE0F" : "\u23F3"}</span>
+                            <div className="task-name" style={{fontSize:13}}>{log.taskTitle}</div>
+                            {log.deliveryVendor && <span className="task-badge" style={{background:"rgba(124,58,237,.08)",color:"var(--purple)",fontSize:10}}>{log.deliveryVendor}</span>}
+                            <span style={{fontSize:10,color:"var(--muted2)",marginLeft:"auto"}}>{new Date(log.timestamp).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
+                          </div>
+                          {photos.length > 0 && (
+                            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                              {photos.map((photo, pi) => (
+                                <div key={pi} style={{width:60,height:60,borderRadius:8,overflow:"hidden",cursor:"pointer",border:"1px solid var(--border)"}}
+                                  onClick={() => setPhotoModal(photo)}>
+                                  <img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Photo fullscreen modal */}
+      {photoModal && (
+        <div className="modal-overlay" onClick={() => setPhotoModal(null)} style={{background:"rgba(0,0,0,.85)"}}>
+          <div style={{maxWidth:"90vw",maxHeight:"90vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <img src={photoModal} style={{maxWidth:"100%",maxHeight:"90vh",borderRadius:12}} />
+          </div>
+        </div>
+      )}
+
       {showModal && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setShowModal(false)}>
           <div className="modal">
@@ -1237,6 +1332,13 @@ function AdminTasks({ tasks, setTasks, toast }) {
                 <div className="form-group"><label>Order in role</label><input type="number" min={1} value={form.order||1} onChange={e => setForm(f=>({...f,order:parseInt(e.target.value)||1}))} /></div>
               </>
             )}
+            <div className="form-group" style={{marginTop:8}}>
+              <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                <input type="checkbox" checked={!!form.requirePhoto} onChange={e => setForm(f=>({...f,requirePhoto:e.target.checked}))} style={{width:18,height:18,accentColor:"var(--primary)"}} />
+                <span>&#128247; Require Photo Upload</span>
+              </label>
+              <div style={{fontSize:11,color:"var(--muted2)",marginTop:4}}>Employee must upload a photo before completing this task</div>
+            </div>
             <div className="modal-actions"><button className="btn" onClick={() => setShowModal(false)}>Cancel</button><button className="btn primary" onClick={save}>{editTask?"Save Changes":"Create Task"}</button></div>
           </div>
         </div>
@@ -1887,6 +1989,12 @@ function EmpTasks({ employee, tasks, schedule }) {
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
   const [now, setNow] = useState(new Date());
+  // Photo uploads per task key
+  const [taskPhotos, setTaskPhotos] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_task_photos")) || {}; } catch { return {}; }
+  });
+  const fileInputRef = useRef(null);
+  const [photoTarget, setPhotoTarget] = useState(null); // which task key is uploading
   // Multiple pending deliveries (array)
   const [pendingDeliveries, setPendingDeliveries] = useState(() => {
     try {
@@ -2026,10 +2134,13 @@ function EmpTasks({ employee, tasks, schedule }) {
   useEffect(() => {
     // Check daily tasks
     const dailyPrompt = allActiveDailyTasks.find(t => getState(t.id).status === "prompt");
-    if (dailyPrompt && !completeModal) { setCompleteModal({ ...dailyPrompt, _key: dailyPrompt.id, _isDelivery: false }); return; }
-    // Check delivery tasks
+    if (dailyPrompt && !completeModal) { setCompleteModal({ ...dailyPrompt, _key: dailyPrompt.id, _isDelivery: false, _vendor: null }); return; }
+    // Check delivery tasks — find the vendor name for this delivery
     const delPrompt = allDeliveryTaskKeys.find(t => getState(t._key).status === "prompt");
-    if (delPrompt && !completeModal) { setCompleteModal({ ...delPrompt, _key: delPrompt._key, _isDelivery: true }); }
+    if (delPrompt && !completeModal) {
+      const delivery = activeDeliveries.find(d => d.id === delPrompt._deliveryId);
+      setCompleteModal({ ...delPrompt, _key: delPrompt._key, _isDelivery: true, _vendor: delivery ? delivery.company : null });
+    }
   }, [taskStates]);
 
   // Check if all delivery tasks for a specific delivery are done
@@ -2066,7 +2177,34 @@ function EmpTasks({ employee, tasks, schedule }) {
     }, 1000);
   };
 
-  const markDone = (taskKey) => { clearInterval(intervals.current[taskKey]); setTaskStates(s => ({...s, [taskKey]: {...s[taskKey], status:"done"}})); setCompleteModal(null); };
+  const markDone = (taskKey, taskTitle, deliveryVendor) => {
+    clearInterval(intervals.current[taskKey]);
+    setTaskStates(s => ({...s, [taskKey]: {...s[taskKey], status:"done"}}));
+    setCompleteModal(null);
+    // Log to localStorage for admin monitoring
+    try {
+      const logs = JSON.parse(localStorage.getItem("crewos_task_logs")) || [];
+      logs.push({ taskKey, taskId: taskKey.split("__").pop(), taskTitle: taskTitle || "Task", employeeName: employee.name, employeeId: employee.id, status: "done", deliveryVendor: deliveryVendor || null, timestamp: new Date().toISOString() });
+      localStorage.setItem("crewos_task_logs", JSON.stringify(logs));
+    } catch {}
+  };
+
+  // Photo upload handler
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !photoTarget) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setTaskPhotos(prev => {
+        const next = { ...prev, [photoTarget]: [...(prev[photoTarget] || []), ev.target.result] };
+        localStorage.setItem("crewos_task_photos", JSON.stringify(next));
+        return next;
+      });
+      setPhotoTarget(null);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
   const formatTime = (secs) => Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
 
   const formatSlotTime = (t) => {
@@ -2077,23 +2215,64 @@ function EmpTasks({ employee, tasks, schedule }) {
   };
 
   // Render a task card — works for both daily and delivery
-  const renderTaskCard = (t, idx, group, keyPrefix) => {
+  const renderTaskCard = (t, idx, group, keyPrefix, deliveryVendor) => {
     const taskKey = keyPrefix ? keyPrefix + "__" + t.id : t.id;
     const prevKey = idx > 0 ? (keyPrefix ? keyPrefix + "__" + group[idx - 1].id : group[idx - 1].id) : null;
     const st = getState(taskKey);
     const locked = idx > 0 && getState(prevKey).status !== "done";
     const pct = st.started && t.duration > 0 ? Math.max(0, Math.min(100, 100 - (st.remaining / (t.duration * 60)) * 100)) : 0;
+    const photos = taskPhotos[taskKey] || [];
+    const needsPhoto = t.requirePhoto && photos.length === 0;
     return (
       <div className={"task-card" + (st.status === "running" ? " active-task" : "") + (st.status === "done" ? " done-task" : "")} key={taskKey} style={locked ? {opacity:.35} : {}}>
         <div className="task-hdr">
           <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",marginRight:4}}>#{idx + 1}</span>
           <div className="task-name">{st.status === "done" && <span style={{color:"var(--green)",marginRight:6}}>&#10003;</span>}{t.title}</div>
+          {t.requirePhoto && <span style={{fontSize:12}} title="Photo required">&#128247;</span>}
           {st.status === "done" && <span className="task-badge" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>Done</span>}
           {st.status === "running" && <span className="timer-display">{formatTime(st.remaining)}</span>}
           {st.status === "prompt" && <span className="timer-display timer-alert">Time's up!</span>}
         </div>
         {t.desc && <div className="task-meta">{t.desc}</div>}
         {st.started && st.status !== "done" && <div className="progress-bar"><div className="progress-fill" style={{width:pct + "%"}} /></div>}
+
+        {/* Photo upload area — visible when task is started and requires photo */}
+        {t.requirePhoto && st.started && st.status !== "done" && (
+          <div style={{marginTop:10,padding:12,background:"var(--bg4)",borderRadius:10,border:"1px dashed var(--border)"}}>
+            <div style={{fontSize:12,fontWeight:500,marginBottom:8,color:"var(--text)"}}>&#128247; Upload Photo {needsPhoto && <span style={{color:"var(--red)",fontSize:11}}>(required)</span>}</div>
+            {photos.length > 0 && (
+              <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                {photos.map((photo, pi) => (
+                  <div key={pi} style={{position:"relative",width:56,height:56,borderRadius:8,overflow:"hidden",border:"1px solid var(--border)"}}>
+                    <img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} />
+                    <button onClick={() => {
+                      setTaskPhotos(prev => {
+                        const next = {...prev, [taskKey]: prev[taskKey].filter((_,i) => i !== pi)};
+                        localStorage.setItem("crewos_task_photos", JSON.stringify(next));
+                        return next;
+                      });
+                    }} style={{position:"absolute",top:1,right:1,width:18,height:18,borderRadius:"50%",background:"rgba(0,0,0,.6)",color:"#fff",border:"none",fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>&times;</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="btn small" style={{fontSize:12}} onClick={() => { setPhotoTarget(taskKey); fileInputRef.current && fileInputRef.current.click(); }}>
+              &#128247; {photos.length > 0 ? "Add Another Photo" : "Take / Upload Photo"}
+            </button>
+          </div>
+        )}
+
+        {/* Show uploaded photos on completed tasks */}
+        {st.status === "done" && photos.length > 0 && (
+          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+            {photos.map((photo, pi) => (
+              <div key={pi} style={{width:40,height:40,borderRadius:6,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} />
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="task-footer" style={{marginTop:st.started ? 10 : 4}}>
           <span style={{fontSize:10,color:"var(--muted2)"}}>&#9201; {t.duration} min</span><div className="spacer" />
           {st.status === "pending" && !locked && <button className="btn primary small" onClick={() => startTask(taskKey, t.duration)}>Start Task</button>}
@@ -2108,6 +2287,9 @@ function EmpTasks({ employee, tasks, schedule }) {
 
   return (
     <div>
+      {/* Hidden file input for photo uploads */}
+      <input type="file" ref={fileInputRef} accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhotoUpload} />
+
       {/* Section Tabs — scrollable if many deliveries */}
       <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:16,WebkitOverflowScrolling:"touch"}}>
         <div className={"period-tab" + (activeSection === "daily" ? " on" : "")}
@@ -2211,7 +2393,7 @@ function EmpTasks({ employee, tasks, schedule }) {
                     <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(deliveryTaskTemplates.length > 0 ? (dCompleted / deliveryTaskTemplates.length) * 100 : 0) + "%",background:"var(--purple)",borderRadius:2,transition:"width .3s"}} /></div>
                   </div>
                 </div>
-                {deliveryTaskTemplates.map((t, idx) => renderTaskCard(t, idx, deliveryTaskTemplates, d.id))}
+                {deliveryTaskTemplates.map((t, idx) => renderTaskCard(t, idx, deliveryTaskTemplates, d.id, d.company))}
               </>
             ) : !myDeliveryRole ? (
               <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
@@ -2236,22 +2418,46 @@ function EmpTasks({ employee, tasks, schedule }) {
       )}
 
       {/* Complete Modal — different time options for daily vs delivery */}
-      {completeModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{textAlign:"center"}}>
-            <div style={{fontSize:40,marginBottom:10}}>&#9200;</div>
-            <div className="modal-title" style={{textAlign:"center"}}>&ldquo;{completeModal.title}&rdquo;<br/><span style={{fontSize:13,color:"var(--muted2)",fontWeight:400}}>Time is up!</span></div>
-            <div style={{fontSize:14,color:"var(--muted3)",marginBottom:18}}>Did you complete this task?</div>
-            <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14}} onClick={() => markDone(completeModal._key)}>&#10003; Yes, task complete</button>
-            <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
-            {completeModal._isDelivery ? (
-              <div className="complete-options">{[5,15,30].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
-            ) : (
-              <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
-            )}
+      {completeModal && (() => {
+        const modalPhotos = taskPhotos[completeModal._key] || [];
+        const modalNeedsPhoto = completeModal.requirePhoto && modalPhotos.length === 0;
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{textAlign:"center"}}>
+              <div style={{fontSize:40,marginBottom:10}}>&#9200;</div>
+              <div className="modal-title" style={{textAlign:"center"}}>&ldquo;{completeModal.title}&rdquo;<br/><span style={{fontSize:13,color:"var(--muted2)",fontWeight:400}}>Time is up!</span></div>
+              <div style={{fontSize:14,color:"var(--muted3)",marginBottom:18}}>Did you complete this task?</div>
+
+              {/* Photo required warning */}
+              {completeModal.requirePhoto && (
+                <div style={{marginBottom:14,padding:12,background:modalNeedsPhoto ? "rgba(239,68,68,.06)" : "rgba(22,163,74,.06)",borderRadius:10,border:"1px solid " + (modalNeedsPhoto ? "rgba(239,68,68,.2)" : "rgba(22,163,74,.2)")}}>
+                  <div style={{fontSize:13,fontWeight:500,color:modalNeedsPhoto ? "var(--red)" : "var(--green)",marginBottom:6}}>
+                    &#128247; {modalNeedsPhoto ? "Photo Required" : "Photo Uploaded (" + modalPhotos.length + ")"}
+                  </div>
+                  {modalPhotos.length > 0 && (
+                    <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:8,flexWrap:"wrap"}}>
+                      {modalPhotos.map((p,i) => <div key={i} style={{width:48,height:48,borderRadius:6,overflow:"hidden",border:"1px solid var(--border)"}}><img src={p} style={{width:"100%",height:"100%",objectFit:"cover"}} /></div>)}
+                    </div>
+                  )}
+                  <button className="btn small" style={{fontSize:12}} onClick={() => { setPhotoTarget(completeModal._key); fileInputRef.current && fileInputRef.current.click(); }}>
+                    &#128247; {modalPhotos.length > 0 ? "Add Another" : "Take / Upload Photo"}
+                  </button>
+                </div>
+              )}
+
+              <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14,opacity:modalNeedsPhoto?.5:1}} disabled={modalNeedsPhoto} onClick={() => markDone(completeModal._key, completeModal.title, completeModal._vendor)}>
+                {modalNeedsPhoto ? "&#128247; Upload photo first" : "&#10003; Yes, task complete"}
+              </button>
+              <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
+              {completeModal._isDelivery ? (
+                <div className="complete-options">{[5,15,30].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
+              ) : (
+                <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
