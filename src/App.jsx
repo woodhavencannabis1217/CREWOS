@@ -1100,6 +1100,38 @@ function AdminPayroll({ employees, clockLogs, overrides, setOverrides, toast }) 
         </div>
       </div>
 
+      {/* Employee Summary Table */}
+      <div className="card" style={{padding:0,overflow:"hidden",marginTop:16}}>
+        <table className="pay-tbl">
+          <thead><tr><th></th><th>Employee</th><th>Role</th><th>Rate</th><th>Hours</th><th>Pay</th><th>Override</th></tr></thead>
+          <tbody>
+            {nonAdmin.map((emp, idx) => {
+              const c = empColors[idx % empColors.length];
+              const actual = getActualHours(emp.id); const ov = getOverride(emp.id);
+              const finalHrs = ov ? ov.hours : actual; const pay = finalHrs * (emp.rate||0);
+              return (
+                <tr key={emp.id}>
+                  <td><div style={{width:10,height:10,borderRadius:3,background:c.bg,border:"2px solid "+c.border}} /></td>
+                  <td style={{fontWeight:600}}>{emp.name}</td>
+                  <td><span className={"task-badge badge-"+emp.role}>Role {emp.role}</span></td>
+                  <td style={{fontFamily:"var(--mono)",fontSize:12}}>${emp.rate||0}/hr</td>
+                  <td style={{fontFamily:"var(--mono)",fontWeight:600}}>{finalHrs}h{ov && <span style={{fontSize:10,color:"var(--amber)",marginLeft:2}}>*</span>}</td>
+                  <td style={{fontFamily:"var(--mono)",color:"var(--green)",fontWeight:600}}>${pay.toFixed(2)}</td>
+                  <td><span className="override-link" onClick={() => { setOverrideModal(emp); setOverrideHours(String(finalHrs)); setOverrideReason(ov?.reason||""); }}>{ov?"Edit":"Override"}</span></td>
+                </tr>
+              );
+            })}
+            <tr style={{background:"var(--bg4)",fontWeight:700}}>
+              <td></td>
+              <td colSpan={3}>Total</td>
+              <td style={{fontFamily:"var(--mono)"}}>{Math.round(totalHours*10)/10}h</td>
+              <td style={{fontFamily:"var(--mono)",color:"var(--green)"}}>${totalPay.toFixed(2)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       {overrideModal && (
         <div className="modal-overlay" onClick={e => e.target===e.currentTarget && setOverrideModal(null)}>
           <div className="modal">
