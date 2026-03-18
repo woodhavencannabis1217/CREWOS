@@ -1958,7 +1958,7 @@ function AdminAlerts({ notifications, setNotifications }) {
     <div>
       {notifications.length>0 && <div style={{marginBottom:14,textAlign:"right"}}><button className="btn small danger" onClick={() => setNotifications([])}>Clear All</button></div>}
       {notifications.length===0 && <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>No alerts yet.</div>}
-      {notifications.map(n => <div key={n.id} className={"notif "+(typeMap[n.type]||"info")}><div><div className="notif-title">{n.title}</div><div className="notif-desc">{n.desc}</div><div className="notif-time">{n.time}</div></div></div>)}
+      {notifications.map(n => <div key={n.id} className={"notif "+(typeMap[n.type]||"info")} style={{display:"flex",alignItems:"flex-start",gap:10}}><div style={{flex:1}}><div className="notif-title">{n.title}</div><div className="notif-desc">{n.desc}</div><div className="notif-time">{n.time}</div></div><span onClick={() => setNotifications(prev => prev.filter(x => x.id !== n.id))} style={{cursor:"pointer",fontSize:18,lineHeight:1,color:"var(--muted2)",padding:"2px 6px",borderRadius:6,flexShrink:0}} onMouseOver={e => e.target.style.color="var(--red)"} onMouseOut={e => e.target.style.color="var(--muted2)"}>&times;</span></div>)}
     </div>
   );
 }
