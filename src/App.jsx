@@ -2446,7 +2446,7 @@ function EmpTasks({ employee, tasks, schedule }) {
               )}
 
               <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14,opacity:modalNeedsPhoto?.5:1}} disabled={modalNeedsPhoto} onClick={() => markDone(completeModal._key, completeModal.title, completeModal._vendor)}>
-                {modalNeedsPhoto ? "&#128247; Upload photo first" : "&#10003; Yes, task complete"}
+                {modalNeedsPhoto ? "\uD83D\uDCF7 Upload photo first" : "\u2713 Yes, task complete"}
               </button>
               <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
               {completeModal._isDelivery ? (
@@ -2634,9 +2634,24 @@ export default function App() {
   // Hash routing: if #/vendor-form, show the vendor form page (must be after all hooks)
   if (hash.startsWith("#/vendor-form")) return <VendorFormPage />;
 
+  // Helper: find employee's scheduled start/end for today
+  const getScheduledTimes = (empId) => {
+    const ws = getWeekStart();
+    const dayIdx = new Date().getDay(); // 0=Sun, adjust: Mon=0...Sun=6
+    const adjDay = dayIdx === 0 ? 6 : dayIdx - 1; // Mon=0, Tue=1...Sun=6
+    // Search all schedule entries for this week + day that match this employee
+    for (const [key, val] of Object.entries(schedule)) {
+      if (key.startsWith(ws + "_") && key.endsWith("_" + adjDay) && val.empId === empId) {
+        return { start: val.start, end: val.end };
+      }
+    }
+    return null;
+  };
+
   const doClockIn = () => {
+    const now = new Date();
     // Clock in immediately
-    setClockLogs(l => [...l, { employeeId: user.id, type: "in", time: new Date().toISOString() }]);
+    setClockLogs(l => [...l, { employeeId: user.id, type: "in", time: now.toISOString() }]);
     // Claim any unclaimed handoff notes for this user (whoever clocks in next gets them)
     setShiftNotes(prev => prev.map(n => {
       if (!n.dismissed && !n.claimedBy && n.fromId !== user.id) {
@@ -2644,6 +2659,35 @@ export default function App() {
       }
       return n;
     }));
+
+    // Check if late compared to schedule
+    if (settings.notifyLate) {
+      const sched = getScheduledTimes(user.id);
+      if (sched && sched.start) {
+        const [sh, sm] = sched.start.split(":").map(Number);
+        const scheduledStart = new Date(now); scheduledStart.setHours(sh, sm, 0, 0);
+        const diffMin = Math.round((now - scheduledStart) / 60000);
+        const threshold = settings.lateThreshold || 5;
+        if (diffMin > threshold) {
+          const timeStr = now.toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+          setNotifications(prev => [{
+            id: uid(), type: "late",
+            title: user.name + " clocked in late",
+            desc: "Scheduled: " + sched.start + " | Clocked in: " + now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) + " (" + diffMin + " min late)",
+            time: timeStr
+          }, ...prev]);
+        } else if (diffMin < -(settings.earlyThreshold || 5)) {
+          const timeStr = now.toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+          setNotifications(prev => [{
+            id: uid(), type: "early",
+            title: user.name + " clocked in early",
+            desc: "Scheduled: " + sched.start + " | Clocked in: " + now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) + " (" + Math.abs(diffMin) + " min early)",
+            time: timeStr
+          }, ...prev]);
+        }
+      }
+    }
+
     toast.show("Clocked in!");
     // Then show cash drawer opening screen
     setShowDrawerOpen(true);
@@ -2742,8 +2786,38 @@ export default function App() {
   };
 
   const finishClockOut = () => {
-    setClockLogs(l => [...l, { employeeId: user.id, type: "out", time: new Date().toISOString() }]);
+    const now = new Date();
+    setClockLogs(l => [...l, { employeeId: user.id, type: "out", time: now.toISOString() }]);
     setPendingClockOut(false);
+
+    // Check if clocking out early compared to schedule
+    if (settings.notifyLate) {
+      const sched = getScheduledTimes(user.id);
+      if (sched && sched.end) {
+        const [eh, em] = sched.end.split(":").map(Number);
+        const scheduledEnd = new Date(now); scheduledEnd.setHours(eh, em, 0, 0);
+        const diffMin = Math.round((scheduledEnd - now) / 60000);
+        const threshold = settings.earlyThreshold || 5;
+        if (diffMin > threshold) {
+          const timeStr = now.toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+          setNotifications(prev => [{
+            id: uid(), type: "early",
+            title: user.name + " clocked out early",
+            desc: "Scheduled end: " + sched.end + " | Clocked out: " + now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) + " (" + diffMin + " min early)",
+            time: timeStr
+          }, ...prev]);
+        } else if (diffMin < -(settings.lateThreshold || 5)) {
+          const timeStr = now.toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+          setNotifications(prev => [{
+            id: uid(), type: "late",
+            title: user.name + " clocked out late",
+            desc: "Scheduled end: " + sched.end + " | Clocked out: " + now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) + " (" + Math.abs(diffMin) + " min late)",
+            time: timeStr
+          }, ...prev]);
+        }
+      }
+    }
+
     toast.show("Clocked out! Shift complete.");
   };
 
