@@ -642,109 +642,142 @@ function calcShiftHours(start, end) {
 
 // ─── ADMIN: SCHEDULE ─────────────────────────────────────────────────────────
 // Flexible: each employee × each day has its own independent start/end time
-function AdminSchedule({ employees, schedule, setSchedule, toast }) {
+function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
-  // Dynamic rows: each row picks an employee via dropdown
-  // Stored per week in localStorage
-  const loadRows = (ws) => {
-    try { return JSON.parse(localStorage.getItem("crewos_sched_rows_" + ws)) || []; } catch { return []; }
-  };
-  const [rows, setRows] = useState(() => loadRows(weekStart));
-  const saveRows = (ws, r) => { localStorage.setItem("crewos_sched_rows_" + ws, JSON.stringify(r)); };
+  // Schedule submission status per week
+  const [submittedWeeks, setSubmittedWeeks] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_submitted_weeks")) || {}; } catch { return {}; }
+  });
+  useEffect(() => { localStorage.setItem("crewos_submitted_weeks", JSON.stringify(submittedWeeks)); }, [submittedWeeks]);
+  const isSubmitted = !!submittedWeeks[weekStart];
+  const submittedAt = submittedWeeks[weekStart] || null;
 
-  // When week changes, load that week's rows
+  // Shift rows stored per week — no employee column, each cell is independent
+  const loadShifts = (ws) => {
+    try { return JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || []; } catch { return []; }
+  };
+  const [shifts, setShifts] = useState(() => loadShifts(weekStart));
+  const saveShifts = (ws, s) => { localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(s)); };
+
   const prevWeekRef = useRef(weekStart);
   useEffect(() => {
     if (prevWeekRef.current !== weekStart) {
-      setRows(loadRows(weekStart));
+      setShifts(loadShifts(weekStart));
       prevWeekRef.current = weekStart;
     }
   }, [weekStart]);
-  // Save rows whenever they change
-  useEffect(() => { saveRows(weekStart, rows); }, [rows, weekStart]);
+  useEffect(() => { saveShifts(weekStart, shifts); }, [shifts, weekStart]);
 
-  // schedule keys: weekStart_empId_dayIdx = { on, start, end }
-  const getCell = (empId, dayIdx) => {
-    if (!empId) return { on: false, start: "09:00", end: "17:00" };
-    const key = weekStart + "_" + empId + "_" + dayIdx;
-    return schedule[key] || { on: false, start: "09:00", end: "17:00" };
+  // schedule keys: weekStart_shiftId_dayIdx = { empId, start, end }
+  const getCell = (shiftId, dayIdx) => {
+    const key = weekStart + "_" + shiftId + "_" + dayIdx;
+    return schedule[key] || { empId: "", start: "09:00", end: "17:00" };
   };
-  const setCell = (empId, dayIdx, updates) => {
-    if (!empId) return;
-    const key = weekStart + "_" + empId + "_" + dayIdx;
-    const cur = getCell(empId, dayIdx);
+  const setCell = (shiftId, dayIdx, updates) => {
+    const key = weekStart + "_" + shiftId + "_" + dayIdx;
+    const cur = getCell(shiftId, dayIdx);
     setSchedule(prev => ({ ...prev, [key]: { ...cur, ...updates } }));
   };
 
-  const addRow = () => {
-    setRows(prev => [...prev, { id: uid(), empId: "" }]);
+  const addShift = () => {
+    setShifts(prev => [...prev, { id: uid() }]);
   };
 
-  const removeRow = (rowId, empId) => {
-    // Clear schedule data for this employee this week
-    if (empId) {
-      const ns = { ...schedule };
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + empId + "_" + d]; }
-      setSchedule(ns);
-    }
-    setRows(prev => prev.filter(r => r.id !== rowId));
+  const removeShift = (shiftId) => {
+    const ns = { ...schedule };
+    for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + shiftId + "_" + d]; }
+    setSchedule(ns);
+    setShifts(prev => prev.filter(s => s.id !== shiftId));
   };
-
-  const changeRowEmployee = (rowId, oldEmpId, newEmpId) => {
-    // If switching employee, clear old employee's schedule data
-    if (oldEmpId && oldEmpId !== newEmpId) {
-      const ns = { ...schedule };
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + oldEmpId + "_" + d]; }
-      setSchedule(ns);
-    }
-    setRows(prev => prev.map(r => r.id === rowId ? { ...r, empId: newEmpId, deliveryRole: "" } : r));
-  };
-
-  // Which employees are already assigned in other rows
-  const assignedEmpIds = rows.map(r => r.empId).filter(Boolean);
 
   const copyPrevWeek = () => {
     const prevStart = addDays(weekStart, -7);
-    const prevRows = loadRows(prevStart);
-    if (prevRows.length === 0) { toast.show("No schedule found last week", "warning"); return; }
-    // Copy rows with new IDs
-    const newRows = prevRows.map(r => ({ id: uid(), empId: r.empId, deliveryRole: r.deliveryRole || "" }));
-    setRows(newRows);
-    // Copy schedule data
+    const prevShifts = loadShifts(prevStart);
+    if (prevShifts.length === 0) { toast.show("No schedule found last week", "warning"); return; }
+    const newShifts = prevShifts.map(s => ({ id: uid(), origId: s.id }));
     const ns = { ...schedule };
-    prevRows.forEach(r => {
-      if (!r.empId) return;
+    newShifts.forEach((ns2, idx) => {
+      const origId = prevShifts[idx].id;
       for (let d = 0; d < 7; d++) {
-        const pk = prevStart + "_" + r.empId + "_" + d;
-        const nk = weekStart + "_" + r.empId + "_" + d;
+        const pk = prevStart + "_" + origId + "_" + d;
+        const nk = weekStart + "_" + ns2.id + "_" + d;
         if (schedule[pk]) ns[nk] = { ...schedule[pk] };
       }
     });
+    setShifts(newShifts.map(s => ({ id: s.id })));
     setSchedule(ns);
     toast.show("Copied last week's schedule");
   };
 
   const clearWeek = () => {
     const ns = { ...schedule };
-    rows.forEach(r => {
-      if (!r.empId) return;
-      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + r.empId + "_" + d]; }
+    shifts.forEach(s => {
+      for (let d = 0; d < 7; d++) { delete ns[weekStart + "_" + s.id + "_" + d]; }
     });
     setSchedule(ns);
-    setRows([]);
+    setShifts([]);
+    setSubmittedWeeks(prev => { const n = { ...prev }; delete n[weekStart]; return n; });
     toast.show("Week cleared", "warning");
   };
 
-  const getWeekHours = (empId) => {
-    if (!empId) return 0;
-    let total = 0;
-    for (let d = 0; d < 7; d++) {
-      const c = getCell(empId, d);
-      if (c.on) total += calcShiftHours(c.start, c.end);
+  // Submit schedule — locks it and notifies employees
+  const submitSchedule = () => {
+    const scheduledEmps = new Map();
+    shifts.forEach(shift => {
+      for (let d = 0; d < 7; d++) {
+        const c = getCell(shift.id, d);
+        if (c.empId) {
+          const emp = nonAdmin.find(e => e.id === c.empId);
+          if (emp) {
+            if (!scheduledEmps.has(c.empId)) scheduledEmps.set(c.empId, []);
+            scheduledEmps.get(c.empId).push({
+              day: DAY_FULL[d],
+              date: formatDate(addDays(weekStart, d)),
+              start: formatTimeLabel(c.start),
+              end: formatTimeLabel(c.end),
+            });
+          }
+        }
+      }
+    });
+    if (scheduledEmps.size === 0) {
+      toast.show("No employees scheduled this week", "warning");
+      return;
     }
-    return total;
+    const now = new Date();
+    const timeStr = now.toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+    scheduledEmps.forEach((shiftList, empId) => {
+      const emp = nonAdmin.find(e => e.id === empId);
+      const shiftSummary = shiftList.map(s => s.day + " " + s.start + "-" + s.end).join(", ");
+      setNotifications(prev => [{
+        id: uid(), type: "schedule",
+        title: "Schedule published: " + formatDate(weekStart) + " week",
+        desc: (emp ? emp.name : "Employee") + ": " + shiftSummary,
+        time: timeStr,
+        empId: empId,
+      }, ...prev]);
+    });
+    setSubmittedWeeks(prev => ({ ...prev, [weekStart]: now.toISOString() }));
+    toast.show("Schedule submitted! " + scheduledEmps.size + " employee(s) notified.");
+  };
+
+  const unsubmitSchedule = () => {
+    setSubmittedWeeks(prev => { const n = { ...prev }; delete n[weekStart]; return n; });
+    toast.show("Schedule reopened for editing", "warning");
+  };
+
+  // Count scheduled employees this week
+  const scheduledCount = () => {
+    const emps = new Set();
+    shifts.forEach(shift => {
+      for (let d = 0; d < 7; d++) {
+        const c = getCell(shift.id, d);
+        if (c.empId) emps.add(c.empId);
+      }
+    });
+    return emps.size;
   };
 
   return (
@@ -753,118 +786,114 @@ function AdminSchedule({ employees, schedule, setSchedule, toast }) {
         <button className="btn small" onClick={() => setWeekStart(addDays(weekStart, -7))}>&#8592; Prev</button>
         <div className="week-label">{formatDate(weekStart)} &ndash; {formatDate(addDays(weekStart, 6))}</div>
         <button className="btn small" onClick={() => setWeekStart(addDays(weekStart, 7))}>Next &#8594;</button>
-        <button className="btn small amber" onClick={copyPrevWeek}>Copy Last Week</button>
-        <button className="btn small danger" onClick={clearWeek}>Clear</button>
+        {!isSubmitted && <button className="btn small amber" onClick={copyPrevWeek}>Copy Last Week</button>}
+        {!isSubmitted && <button className="btn small danger" onClick={clearWeek}>Clear</button>}
       </div>
+
+      {isSubmitted && (
+        <div style={{marginBottom:14,padding:"14px 18px",background:"rgba(22,163,74,.06)",borderRadius:12,border:"1px solid rgba(22,163,74,.15)",fontSize:12,color:"var(--green)",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>&#10003;</span>
+          <div style={{flex:1}}>
+            <strong>Schedule Published</strong> &mdash; {scheduledCount()} employee(s) notified.
+            <br/><span style={{fontSize:11,opacity:.7}}>Submitted {new Date(submittedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}. Click &ldquo;Edit Schedule&rdquo; to make changes.</span>
+          </div>
+          <button className="btn small" onClick={unsubmitSchedule}
+            style={{padding:"8px 16px",fontSize:12,background:"var(--amber)",color:"#fff",fontWeight:600,borderRadius:8,border:"none",cursor:"pointer",whiteSpace:"nowrap"}}>
+            &#9998; Edit Schedule
+          </button>
+        </div>
+      )}
+
       <div className="sched-wrap">
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
-              <th style={{background:"#2c3e7f",color:"#fff",minWidth:160,textAlign:"left",paddingLeft:16}}>Employee</th>
               {DAYS.map((d, i) => (
-                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:110}}>
+                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:130}}>
                   {DAY_FULL[i]}<br/>
                   <span style={{fontWeight:400,fontSize:10,opacity:.8}}>({formatDate(addDays(weekStart, i))})</span>
                 </th>
               ))}
-              <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:10,minWidth:50}}>TOTAL</th>
-              <th style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:9,minWidth:80}}>DELIVERY<br/>ROLE</th>
               <th style={{background:"#2c3e7f",color:"#fff",width:40}}></th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={11} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
-                No shifts added yet. Click &ldquo;+ Add Employee&rdquo; below to build the schedule.
+            {shifts.length === 0 && (
+              <tr><td colSpan={8} style={{textAlign:"center",padding:"30px 0",color:"var(--muted)",fontSize:13}}>
+                No shifts yet. Click &ldquo;+ Add Shift&rdquo; below to build the schedule.
               </td></tr>
             )}
-            {rows.map(row => {
-              const emp = nonAdmin.find(e => e.id === row.empId);
-              const weekHrs = getWeekHours(row.empId);
-              return (
-                <tr key={row.id}>
-                  <td style={{paddingLeft:12,verticalAlign:"middle"}}>
-                    <select
-                      value={row.empId}
-                      onChange={e => changeRowEmployee(row.id, row.empId, e.target.value)}
-                      style={{width:"100%",fontSize:13,padding:"8px 6px",fontWeight:600,borderRadius:8,border:"1px solid var(--border2)",background:"var(--bg2)"}}
-                    >
-                      <option value="">-- Select Employee --</option>
-                      {nonAdmin.map(e => (
-                        <option key={e.id} value={e.id} disabled={assignedEmpIds.includes(e.id) && e.id !== row.empId}>
-                          {e.name} (Role {e.role})
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  {DAYS.map((_, di) => {
-                    const c = getCell(row.empId, di);
-                    const hrs = c.on ? calcShiftHours(c.start, c.end) : 0;
-                    return (
-                      <td key={di} style={{padding:"6px 4px",verticalAlign:"top",background:c.on?"rgba(22,163,74,.03)":"transparent"}}>
-                        <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"center",minHeight:44}}>
-                          {row.empId ? (
-                            <>
-                              <div
-                                onClick={() => setCell(row.empId, di, { on: !c.on })}
-                                style={{fontSize:10,fontWeight:600,cursor:"pointer",padding:"2px 10px",borderRadius:10,
-                                  background:c.on?"rgba(22,163,74,.1)":"var(--bg4)",color:c.on?"var(--green)":"var(--muted)",
-                                  border:"1px solid "+(c.on?"rgba(22,163,74,.25)":"var(--border)"),userSelect:"none",transition:"all .15s"}}
-                              >
-                                {c.on ? "ON" : "OFF"}
-                              </div>
-                              {c.on && (
-                                <>
-                                  <select value={c.start} onChange={e => setCell(row.empId, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                                  </select>
-                                  <select value={c.end} onChange={e => setCell(row.empId, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"2px 2px"}}>
-                                    {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
-                                  </select>
-                                  <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
-                                </>
-                              )}
-                            </>
-                          ) : (
-                            <span style={{fontSize:10,color:"var(--muted)",fontStyle:"italic"}}>—</span>
-                          )}
-                        </div>
-                      </td>
-                    );
-                  })}
-                  <td style={{textAlign:"center",verticalAlign:"middle",fontFamily:"var(--mono)",fontSize:13,fontWeight:600,color:weekHrs>0?"var(--green)":"var(--muted)"}}>
-                    {weekHrs}h
-                  </td>
-                  <td style={{textAlign:"center",verticalAlign:"middle",padding:"6px 4px"}}>
-                    {row.empId ? (
-                      <select
-                        value={row.deliveryRole || ""}
-                        onChange={e => setRows(prev => prev.map(r => r.id === row.id ? { ...r, deliveryRole: e.target.value } : r))}
-                        style={{width:"100%",fontSize:10,padding:"4px 2px",borderRadius:6,textAlign:"center"}}
-                      >
-                        <option value="">--</option>
-                        <option value="A">Role A</option>
-                        <option value="B">Role B</option>
-                      </select>
-                    ) : <span style={{fontSize:10,color:"var(--muted)"}}>--</span>}
-                  </td>
-                  <td style={{textAlign:"center",verticalAlign:"middle"}}>
-                    <button onClick={() => removeRow(row.id, row.empId)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4}} title="Remove row">&#10005;</button>
-                  </td>
-                </tr>
-              );
-            })}
+            {shifts.map(shift => (
+              <tr key={shift.id} style={{borderBottom:"2px solid var(--border)"}}>
+                {DAYS.map((_, di) => {
+                  const c = getCell(shift.id, di);
+                  const hasEmp = !!c.empId;
+                  const hrs = hasEmp ? calcShiftHours(c.start, c.end) : 0;
+                  const emp = nonAdmin.find(e => e.id === c.empId);
+                  return (
+                    <td key={di} style={{padding:"8px 5px",verticalAlign:"top",background:hasEmp?"rgba(22,163,74,.03)":"transparent"}}>
+                      <div style={{display:"flex",flexDirection:"column",gap:4,minHeight:50}}>
+                        <select
+                          value={c.empId}
+                          onChange={e => setCell(shift.id, di, { empId: e.target.value })}
+                          disabled={isSubmitted}
+                          style={{width:"100%",fontSize:11,padding:"5px 4px",fontWeight:600,borderRadius:6,
+                            border:"1px solid "+(hasEmp?"rgba(22,163,74,.3)":"var(--border2)"),
+                            background:hasEmp?"rgba(22,163,74,.06)":"var(--bg2)",
+                            color:hasEmp?"var(--green)":"var(--muted)",
+                            opacity:isSubmitted?.7:1}}
+                        >
+                          <option value="">-- Off --</option>
+                          {nonAdmin.map(e => (
+                            <option key={e.id} value={e.id}>{e.name}</option>
+                          ))}
+                        </select>
+                        {hasEmp && (
+                          <>
+                            <select value={c.start} disabled={isSubmitted} onChange={e => setCell(shift.id, di, {start: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px",opacity:isSubmitted?.7:1}}>
+                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                            </select>
+                            <select value={c.end} disabled={isSubmitted} onChange={e => setCell(shift.id, di, {end: e.target.value})} style={{width:"100%",fontSize:10,padding:"3px 2px",opacity:isSubmitted?.7:1}}>
+                              {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                            </select>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                              <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
+                              {emp && <span style={{fontSize:8,color:"var(--muted2)",fontWeight:500}}>{emp.name.split(" ")[0]}</span>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+                <td style={{textAlign:"center",verticalAlign:"middle"}}>
+                  {!isSubmitted && <button onClick={() => removeShift(shift.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:14,padding:4}} title="Remove shift">&#10005;</button>}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-      <div style={{display:"flex",gap:10,marginTop:12}}>
-        <button className="btn primary small" onClick={addRow} style={{padding:"10px 20px",fontSize:13}}>+ Add Employee</button>
-        {rows.length > 0 && <span style={{fontSize:12,color:"var(--muted2)",alignSelf:"center"}}>{rows.filter(r=>r.empId).length} employee{rows.filter(r=>r.empId).length!==1?"s":""} scheduled</span>}
+
+      <div style={{display:"flex",gap:10,marginTop:12,alignItems:"center",flexWrap:"wrap"}}>
+        {!isSubmitted && (
+          <>
+            <button className="btn primary small" onClick={addShift} style={{padding:"10px 20px",fontSize:13}}>+ Add Shift</button>
+            <button onClick={submitSchedule}
+              style={{padding:"10px 24px",fontSize:13,background:"var(--green)",color:"#fff",fontWeight:600,borderRadius:10,border:"none",cursor:"pointer",boxShadow:"0 2px 8px rgba(22,163,74,.18)",transition:"all .15s"}}>
+              &#10003; Submit Schedule
+            </button>
+          </>
+        )}
+        {shifts.length > 0 && <span style={{fontSize:12,color:"var(--muted2)"}}>{scheduledCount()} employee{scheduledCount()!==1?"s":""} scheduled</span>}
       </div>
-      <div className="sched-rule">
-        <span style={{fontSize:16}}>&#9888;</span>
-        Schedule must be submitted by Saturday 11:59 PM &middot; Employees receive 24hr minimum notice
-      </div>
+
+      {!isSubmitted && (
+        <div className="sched-rule">
+          <span style={{fontSize:16}}>&#9888;</span>
+          Schedule must be submitted by Saturday 11:59 PM &middot; Employees receive 24hr minimum notice
+        </div>
+      )}
     </div>
   );
 }
@@ -1615,20 +1644,32 @@ function AdminSettings({ settings, setSettings }) {
 function EmpSchedule({ employee, schedule }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
 
+  // Check if schedule is submitted for this week
+  let isPublished = false;
+  try { const sw = JSON.parse(localStorage.getItem("crewos_submitted_weeks")) || {}; isPublished = !!sw[weekStart]; } catch {}
+
+  // Scan ALL schedule keys for this week to find shifts assigned to this employee
   const myShifts = [];
-  for (let di = 0; di < 7; di++) {
-    const key = weekStart + "_" + employee.id + "_" + di;
+  const prefix = weekStart + "_";
+  Object.keys(schedule).forEach(key => {
+    if (!key.startsWith(prefix)) return;
     const c = schedule[key];
-    if (c && c.on && c.start && c.end) {
-      myShifts.push({
-        day: DAY_FULL[di],
-        date: formatDate(addDays(weekStart, di)),
-        start: c.start,
-        end: c.end,
-        hours: calcShiftHours(c.start, c.end),
-      });
+    if (c && c.empId === employee.id && c.start && c.end) {
+      const parts = key.split("_");
+      const dayIdx = parseInt(parts[parts.length - 1], 10);
+      if (dayIdx >= 0 && dayIdx < 7) {
+        myShifts.push({
+          day: DAY_FULL[dayIdx],
+          date: formatDate(addDays(weekStart, dayIdx)),
+          start: c.start,
+          end: c.end,
+          hours: calcShiftHours(c.start, c.end),
+          dayIdx,
+        });
+      }
     }
-  }
+  });
+  myShifts.sort((a, b) => a.dayIdx - b.dayIdx);
 
   const totalHrs = myShifts.reduce((s, x) => s + x.hours, 0);
 
@@ -1639,12 +1680,17 @@ function EmpSchedule({ employee, schedule }) {
         <div className="week-label">{formatDate(weekStart)} &ndash; {formatDate(addDays(weekStart,6))}</div>
         <button className="btn small" onClick={() => setWeekStart(addDays(weekStart,7))}>Next &#8594;</button>
       </div>
-      {myShifts.length > 0 && (
-        <div style={{textAlign:"right",fontSize:12,color:"var(--muted2)",marginBottom:10}}>
-          Total: <strong style={{color:"var(--green)"}}>{totalHrs}h</strong> this week
+      {!isPublished && (
+        <div style={{padding:"12px 16px",background:"rgba(217,119,6,.06)",borderRadius:10,border:"1px solid rgba(217,119,6,.15)",fontSize:12,color:"var(--amber)",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:14}}>&#9888;</span> Schedule for this week has not been published yet. Check back later.
         </div>
       )}
-      {myShifts.length===0 ? <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>No shifts scheduled this week.</div>
+      {myShifts.length > 0 && (
+        <div style={{textAlign:"right",fontSize:12,color:"var(--muted2)",marginBottom:10}}>
+          Total: <strong style={{color:"var(--green)"}}>{totalHrs}h</strong> this week &middot; {myShifts.length} shift{myShifts.length>1?"s":""}
+        </div>
+      )}
+      {myShifts.length===0 ? <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>{isPublished ? "You have no shifts scheduled this week." : "Schedule not yet published."}</div>
         : myShifts.map((s,i) => (
           <div className="my-shift-card" key={i}>
             <div className="shift-day">{s.day} &middot; {s.date}</div>
@@ -2196,7 +2242,7 @@ export default function App() {
         </div>
 
         <div className="body">
-          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} />}
+          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} toast={toast} />}
