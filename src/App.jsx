@@ -1407,6 +1407,13 @@ function VendorFormPage() {
       const notifs = JSON.parse(localStorage.getItem("crewos_notifs")) || [];
       notifs.unshift({ id: uid(), type:"vendor", title:"Vendor delivery: "+company, desc:"Delivery form submitted. Tasks triggered for all roles.", time: timeStr });
       localStorage.setItem("crewos_notifs", JSON.stringify(notifs));
+      // Add to pending deliveries array (supports multiple vendors)
+      const pendArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
+      if (!pendArr.some(d => d.id === deliveryData.id)) {
+        pendArr.push({ company, time: timeStr, id: deliveryData.id });
+        localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pendArr));
+      }
+      // Also set old key for backward compat
       localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: deliveryData.id }));
     } catch {}
     setSubmitting(false);
@@ -1880,28 +1887,59 @@ function EmpTasks({ employee, tasks, schedule }) {
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
   const [now, setNow] = useState(new Date());
-  const [pendingDelivery, setPendingDelivery] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("crewos_pending_delivery")) || null; } catch { return null; }
+  // Multiple pending deliveries (array)
+  const [pendingDeliveries, setPendingDeliveries] = useState(() => {
+    try {
+      // Migrate old single delivery format
+      const old = localStorage.getItem("crewos_pending_delivery");
+      const arr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
+      if (old) {
+        const parsed = JSON.parse(old);
+        if (parsed && !arr.some(d => d.id === parsed.id)) arr.push(parsed);
+        localStorage.removeItem("crewos_pending_delivery");
+        localStorage.setItem("crewos_pending_deliveries", JSON.stringify(arr));
+      }
+      return arr;
+    } catch { return []; }
   });
-  const [deliveryTasksDone, setDeliveryTasksDone] = useState(false);
+  const [completedDeliveryIds, setCompletedDeliveryIds] = useState(new Set());
   const intervals = useRef({});
 
-  // Poll for pending delivery and update time
+  // Poll for pending deliveries and update time
   useEffect(() => {
     const iv = setInterval(() => {
       setNow(new Date());
       try {
-        const pd = JSON.parse(localStorage.getItem("crewos_pending_delivery"));
-        if (pd && !pendingDelivery) {
-          setPendingDelivery(pd);
-          setActiveSection("delivery"); // Auto-switch to delivery tab
+        // Check old single key too (in case vendor form just wrote it)
+        const oldSingle = localStorage.getItem("crewos_pending_delivery");
+        if (oldSingle) {
+          const parsed = JSON.parse(oldSingle);
+          if (parsed) {
+            setPendingDeliveries(prev => {
+              if (prev.some(d => d.id === parsed.id)) return prev;
+              const next = [...prev, parsed];
+              localStorage.setItem("crewos_pending_deliveries", JSON.stringify(next));
+              return next;
+            });
+            localStorage.removeItem("crewos_pending_delivery");
+            setActiveSection("delivery_" + parsed.id);
+          }
+        }
+        // Check array key
+        const arr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
+        if (arr.length > pendingDeliveries.length) {
+          const newOnes = arr.filter(d => !pendingDeliveries.some(p => p.id === d.id));
+          if (newOnes.length > 0) {
+            setPendingDeliveries(arr);
+            setActiveSection("delivery_" + newOnes[newOnes.length - 1].id);
+          }
         }
       } catch {}
     }, 2000);
     return () => clearInterval(iv);
-  }, [pendingDelivery]);
+  }, [pendingDeliveries]);
 
-  // Determine employee's delivery role from schedule
+  // Determine employee's delivery role — fallback to staff role (A/B)
   const weekStart = getWeekStart();
   let myDeliveryRole = "";
   try {
@@ -1910,19 +1948,26 @@ function EmpTasks({ employee, tasks, schedule }) {
     if (roles[roleKey]) {
       myDeliveryRole = roles[roleKey];
     } else {
-      // Fallback: if not explicitly assigned, check if other employees have roles
-      const allKeys = Object.keys(roles).filter(k => k.startsWith(weekStart + "_") && !k.endsWith("_" + employee.id));
-      const otherRoles = allKeys.map(k => roles[k]).filter(Boolean);
-      if (otherRoles.includes("A") && !otherRoles.includes("B")) myDeliveryRole = "B";
-      else if (otherRoles.includes("B") && !otherRoles.includes("A")) myDeliveryRole = "A";
+      // Fallback to employee's staff role
+      if (employee.role) {
+        const r = employee.role.toUpperCase();
+        if (r === "A" || r.includes("ROLE A")) myDeliveryRole = "A";
+        else if (r === "B" || r.includes("ROLE B")) myDeliveryRole = "B";
+      }
+      // If still empty, try inferring from other assigned roles
+      if (!myDeliveryRole) {
+        const allKeys = Object.keys(roles).filter(k => k.startsWith(weekStart + "_") && !k.endsWith("_" + employee.id));
+        const otherRoles = allKeys.map(k => roles[k]).filter(Boolean);
+        if (otherRoles.includes("A") && !otherRoles.includes("B")) myDeliveryRole = "B";
+        else if (otherRoles.includes("B") && !otherRoles.includes("A")) myDeliveryRole = "A";
+      }
     }
   } catch {}
 
-  // Filter daily tasks: only tasks whose frequency matches today
+  // Filter daily tasks
   const dailyTasks = tasks.filter(t => {
     if (t.category !== "daily") return false;
     if (!t.frequency || t.frequency <= 1) return true;
-    // Use day-of-year to determine if task runs today
     const startOfYear = new Date(now.getFullYear(), 0, 0);
     const dayOfYear = Math.floor((now - startOfYear) / 86400000);
     return dayOfYear % t.frequency === 0;
@@ -1938,69 +1983,91 @@ function EmpTasks({ employee, tasks, schedule }) {
   Object.keys(dailyByTime).forEach(k => dailyByTime[k].sort((a, b) => (a.order || 0) - (b.order || 0)));
   const dailyTimeSlots = Object.keys(dailyByTime).sort();
 
-  // Only show time slots that have arrived
   const currentTimeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
   const activeSlots = dailyTimeSlots.filter(slot => slot <= currentTimeStr);
   const futureSlots = dailyTimeSlots.filter(slot => slot > currentTimeStr);
 
-  // Delivery tasks for this employee
-  const myDeliveryTasks = pendingDelivery && myDeliveryRole && !deliveryTasksDone
+  // Delivery tasks template (from admin)
+  const deliveryTaskTemplates = myDeliveryRole
     ? tasks.filter(t => t.category === "delivery" && t.role === myDeliveryRole).sort((a, b) => (a.order || 0) - (b.order || 0))
     : [];
 
-  // Flatten all visible tasks for counting
+  // Active (non-completed) deliveries
+  const activeDeliveries = pendingDeliveries.filter(d => !completedDeliveryIds.has(d.id));
+
+  // For each delivery, create unique task IDs: deliveryId__taskId
+  const getDeliveryTaskKey = (deliveryId, taskId) => deliveryId + "__" + taskId;
+
   const allActiveDailyTasks = activeSlots.flatMap(slot => dailyByTime[slot]);
-  const allVisibleTasks = [...allActiveDailyTasks, ...myDeliveryTasks];
+
+  // All delivery tasks across all active deliveries (for prompt detection)
+  const allDeliveryTaskKeys = activeDeliveries.flatMap(d =>
+    deliveryTaskTemplates.map(t => ({ ...t, _key: getDeliveryTaskKey(d.id, t.id), _deliveryId: d.id }))
+  );
 
   const getState = (id) => taskStates[id] || { status:"pending", remaining:null, started:false };
 
-  const startTask = (task) => {
-    const secs = task.duration * 60;
-    setTaskStates(s => ({...s, [task.id]: {status:"running", remaining:secs, started:true}}));
-    intervals.current[task.id] = setInterval(() => {
+  const startTask = (taskKey, duration) => {
+    const secs = duration * 60;
+    setTaskStates(s => ({...s, [taskKey]: {status:"running", remaining:secs, started:true}}));
+    intervals.current[taskKey] = setInterval(() => {
       setTaskStates(s => {
-        const cur = s[task.id]; if (!cur || cur.status !== "running") return s;
+        const cur = s[taskKey]; if (!cur || cur.status !== "running") return s;
         const next = cur.remaining - 1;
-        if (next <= 0) { clearInterval(intervals.current[task.id]); return {...s, [task.id]: {...cur, status:"prompt", remaining:0}}; }
-        return {...s, [task.id]: {...cur, remaining:next}};
+        if (next <= 0) { clearInterval(intervals.current[taskKey]); return {...s, [taskKey]: {...cur, status:"prompt", remaining:0}}; }
+        return {...s, [taskKey]: {...cur, remaining:next}};
       });
     }, 1000);
   };
 
   useEffect(() => { return () => Object.values(intervals.current).forEach(clearInterval); }, []);
+
+  // Detect prompts across all task types
   useEffect(() => {
-    const p = allVisibleTasks.find(t => getState(t.id).status === "prompt");
-    if (p && !completeModal) setCompleteModal(p);
+    // Check daily tasks
+    const dailyPrompt = allActiveDailyTasks.find(t => getState(t.id).status === "prompt");
+    if (dailyPrompt && !completeModal) { setCompleteModal({ ...dailyPrompt, _key: dailyPrompt.id, _isDelivery: false }); return; }
+    // Check delivery tasks
+    const delPrompt = allDeliveryTaskKeys.find(t => getState(t._key).status === "prompt");
+    if (delPrompt && !completeModal) { setCompleteModal({ ...delPrompt, _key: delPrompt._key, _isDelivery: true }); }
   }, [taskStates]);
 
-  // Check if all delivery tasks are done
+  // Check if all delivery tasks for a specific delivery are done
   useEffect(() => {
-    if (myDeliveryTasks.length > 0 && myDeliveryTasks.every(t => getState(t.id).status === "done")) {
-      setDeliveryTasksDone(true);
-      localStorage.removeItem("crewos_pending_delivery");
-      setPendingDelivery(null);
-    }
-  }, [taskStates, myDeliveryTasks.length]);
+    activeDeliveries.forEach(d => {
+      if (deliveryTaskTemplates.length > 0) {
+        const allDone = deliveryTaskTemplates.every(t => getState(getDeliveryTaskKey(d.id, t.id)).status === "done");
+        if (allDone) {
+          setCompletedDeliveryIds(prev => {
+            const next = new Set(prev);
+            next.add(d.id);
+            // Remove from localStorage
+            const remaining = pendingDeliveries.filter(pd => pd.id !== d.id && !next.has(pd.id));
+            localStorage.setItem("crewos_pending_deliveries", JSON.stringify(remaining));
+            return next;
+          });
+        }
+      }
+    });
+  }, [taskStates, activeDeliveries.length]);
 
-  const addTime = (taskId, mins) => {
-    clearInterval(intervals.current[taskId]);
+  const addTime = (taskKey, mins) => {
+    clearInterval(intervals.current[taskKey]);
     const secs = mins * 60;
-    setTaskStates(s => ({...s, [taskId]: {status:"running", remaining:secs, started:true}}));
+    setTaskStates(s => ({...s, [taskKey]: {status:"running", remaining:secs, started:true}}));
     setCompleteModal(null);
-    intervals.current[taskId] = setInterval(() => {
+    intervals.current[taskKey] = setInterval(() => {
       setTaskStates(s => {
-        const cur = s[taskId]; if (!cur || cur.status !== "running") return s;
+        const cur = s[taskKey]; if (!cur || cur.status !== "running") return s;
         const next = cur.remaining - 1;
-        if (next <= 0) { clearInterval(intervals.current[taskId]); return {...s, [taskId]: {...cur, status:"prompt", remaining:0}}; }
-        return {...s, [taskId]: {...cur, remaining:next}};
+        if (next <= 0) { clearInterval(intervals.current[taskKey]); return {...s, [taskKey]: {...cur, status:"prompt", remaining:0}}; }
+        return {...s, [taskKey]: {...cur, remaining:next}};
       });
     }, 1000);
   };
 
-  const markDone = (taskId) => { clearInterval(intervals.current[taskId]); setTaskStates(s => ({...s, [taskId]: {...s[taskId], status:"done"}})); setCompleteModal(null); };
+  const markDone = (taskKey) => { clearInterval(intervals.current[taskKey]); setTaskStates(s => ({...s, [taskKey]: {...s[taskKey], status:"done"}})); setCompleteModal(null); };
   const formatTime = (secs) => Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
-
-  const completedCount = allVisibleTasks.filter(t => getState(t.id).status === "done").length;
 
   const formatSlotTime = (t) => {
     const [hh, mm] = t.split(":").map(Number);
@@ -2009,17 +2076,18 @@ function EmpTasks({ employee, tasks, schedule }) {
     return h + ":" + String(mm).padStart(2, "0") + " " + ap;
   };
 
-  const renderTaskCard = (t, idx, group) => {
-    const st = getState(t.id);
-    const locked = idx > 0 && getState(group[idx - 1].id).status !== "done";
+  // Render a task card — works for both daily and delivery
+  const renderTaskCard = (t, idx, group, keyPrefix) => {
+    const taskKey = keyPrefix ? keyPrefix + "__" + t.id : t.id;
+    const prevKey = idx > 0 ? (keyPrefix ? keyPrefix + "__" + group[idx - 1].id : group[idx - 1].id) : null;
+    const st = getState(taskKey);
+    const locked = idx > 0 && getState(prevKey).status !== "done";
     const pct = st.started && t.duration > 0 ? Math.max(0, Math.min(100, 100 - (st.remaining / (t.duration * 60)) * 100)) : 0;
-    const isDelivery = t.category === "delivery";
     return (
-      <div className={"task-card" + (st.status === "running" ? " active-task" : "") + (st.status === "done" ? " done-task" : "")} key={t.id} style={locked ? {opacity:.35} : {}}>
+      <div className={"task-card" + (st.status === "running" ? " active-task" : "") + (st.status === "done" ? " done-task" : "")} key={taskKey} style={locked ? {opacity:.35} : {}}>
         <div className="task-hdr">
           <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",marginRight:4}}>#{idx + 1}</span>
           <div className="task-name">{st.status === "done" && <span style={{color:"var(--green)",marginRight:6}}>&#10003;</span>}{t.title}</div>
-          {isDelivery && <span className={"task-badge badge-"+(t.role==="A"?"A":"B")} style={{fontSize:9}}>Role {t.role}</span>}
           {st.status === "done" && <span className="task-badge" style={{background:"rgba(22,163,74,.08)",color:"var(--green)"}}>Done</span>}
           {st.status === "running" && <span className="timer-display">{formatTime(st.remaining)}</span>}
           {st.status === "prompt" && <span className="timer-display timer-alert">Time's up!</span>}
@@ -2028,45 +2096,44 @@ function EmpTasks({ employee, tasks, schedule }) {
         {st.started && st.status !== "done" && <div className="progress-bar"><div className="progress-fill" style={{width:pct + "%"}} /></div>}
         <div className="task-footer" style={{marginTop:st.started ? 10 : 4}}>
           <span style={{fontSize:10,color:"var(--muted2)"}}>&#9201; {t.duration} min</span><div className="spacer" />
-          {st.status === "pending" && !locked && <button className="btn primary small" onClick={() => startTask(t)}>Start Task</button>}
+          {st.status === "pending" && !locked && <button className="btn primary small" onClick={() => startTask(taskKey, t.duration)}>Start Task</button>}
           {locked && <span style={{fontSize:11,color:"var(--muted2)"}}>Complete previous task first</span>}
         </div>
       </div>
     );
   };
 
-  // Separate progress counts
+  // Progress counts
   const dailyCompleted = allActiveDailyTasks.filter(t => getState(t.id).status === "done").length;
-  const deliveryCompleted = myDeliveryTasks.filter(t => getState(t.id).status === "done").length;
-
-  // Check if the completeModal task is a delivery task
-  const isModalDelivery = completeModal && completeModal.category === "delivery";
 
   return (
     <div>
-      {/* Section Tabs */}
-      <div className="period-tabs" style={{marginBottom:16}}>
-        <div className={"period-tab" + (activeSection === "daily" ? " on" : "")} onClick={() => setActiveSection("daily")}
-          style={{position:"relative"}}>
+      {/* Section Tabs — scrollable if many deliveries */}
+      <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:16,WebkitOverflowScrolling:"touch"}}>
+        <div className={"period-tab" + (activeSection === "daily" ? " on" : "")}
+          onClick={() => setActiveSection("daily")} style={{whiteSpace:"nowrap",flexShrink:0}}>
           &#128197; Daily Tasks
           {allActiveDailyTasks.length > 0 && <span style={{marginLeft:6,fontSize:10,fontFamily:"var(--mono)"}}>{dailyCompleted}/{allActiveDailyTasks.length}</span>}
         </div>
-        <div className={"period-tab" + (activeSection === "delivery" ? " on" : "")} onClick={() => setActiveSection("delivery")}
-          style={{position:"relative"}}>
-          &#128666; Delivery Tasks
-          {pendingDelivery && !deliveryTasksDone && myDeliveryTasks.length > 0 && (
-            <span style={{marginLeft:6,fontSize:10,fontFamily:"var(--mono)"}}>{deliveryCompleted}/{myDeliveryTasks.length}</span>
-          )}
-          {pendingDelivery && !deliveryTasksDone && (
-            <span style={{position:"absolute",top:-4,right:-4,width:8,height:8,borderRadius:"50%",background:"var(--red)"}} />
-          )}
-        </div>
+        {activeDeliveries.map(d => {
+          const dKey = "delivery_" + d.id;
+          const dCompleted = deliveryTaskTemplates.filter(t => getState(getDeliveryTaskKey(d.id, t.id)).status === "done").length;
+          return (
+            <div key={dKey} className={"period-tab" + (activeSection === dKey ? " on" : "")}
+              onClick={() => setActiveSection(dKey)} style={{whiteSpace:"nowrap",flexShrink:0,position:"relative"}}>
+              &#128666; {d.company || "Delivery"}
+              {deliveryTaskTemplates.length > 0 && <span style={{marginLeft:6,fontSize:10,fontFamily:"var(--mono)"}}>{dCompleted}/{deliveryTaskTemplates.length}</span>}
+              {dCompleted < deliveryTaskTemplates.length && (
+                <span style={{position:"absolute",top:-4,right:-4,width:8,height:8,borderRadius:"50%",background:"var(--red)"}} />
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* ═══ DAILY TASKS SECTION ═══ */}
       {activeSection === "daily" && (
         <div>
-          {/* Progress bar */}
           {allActiveDailyTasks.length > 0 && (
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
@@ -2097,12 +2164,11 @@ function EmpTasks({ employee, tasks, schedule }) {
                     {slotTasks.filter(t => getState(t.id).status === "done").length}/{slotTasks.length} done
                   </span>
                 </div>
-                {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks))}
+                {slotTasks.map((t, idx) => renderTaskCard(t, idx, slotTasks, null))}
               </div>
             );
           })}
 
-          {/* Future slots preview */}
           {futureSlots.length > 0 && activeSlots.length > 0 && (
             <div style={{marginTop:10,marginBottom:20}}>
               <div style={{fontSize:12,color:"var(--muted2)",fontStyle:"italic",textAlign:"center",padding:"10px 0",background:"var(--bg4)",borderRadius:10,border:"1px solid var(--border)"}}>
@@ -2113,53 +2179,59 @@ function EmpTasks({ employee, tasks, schedule }) {
         </div>
       )}
 
-      {/* ═══ DELIVERY TASKS SECTION ═══ */}
-      {activeSection === "delivery" && (
-        <div>
-          {pendingDelivery && !deliveryTasksDone ? (
-            <>
-              <div style={{background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:14,padding:16,marginBottom:14}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                  <span style={{fontSize:18}}>&#128666;</span>
-                  <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Vendor Delivery</div>
-                  <div className="spacer" />
-                  {myDeliveryRole && <span className={"task-badge badge-"+(myDeliveryRole==="A"?"A":"B")}>You: Role {myDeliveryRole}</span>}
-                </div>
-                <div style={{fontSize:12,color:"var(--muted2)"}}>
-                  {pendingDelivery.company} &middot; {pendingDelivery.time}
-                </div>
+      {/* ═══ PER-VENDOR DELIVERY SECTIONS ═══ */}
+      {activeDeliveries.map(d => {
+        const dKey = "delivery_" + d.id;
+        if (activeSection !== dKey) return null;
+        const dCompleted = deliveryTaskTemplates.filter(t => getState(getDeliveryTaskKey(d.id, t.id)).status === "done").length;
+        const allDone = deliveryTaskTemplates.length > 0 && dCompleted === deliveryTaskTemplates.length;
+        return (
+          <div key={dKey}>
+            <div style={{background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:14,padding:16,marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                <span style={{fontSize:18}}>&#128666;</span>
+                <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>Delivery - {d.company}</div>
+                <div className="spacer" />
+                {myDeliveryRole && <span className={"task-badge badge-"+(myDeliveryRole==="A"?"A":"B")}>You: Role {myDeliveryRole}</span>}
               </div>
+              <div style={{fontSize:12,color:"var(--muted2)"}}>{d.time}</div>
+            </div>
 
-              {myDeliveryRole && myDeliveryTasks.length > 0 && (
+            {allDone ? (
+              <div style={{textAlign:"center",padding:"40px 0"}}>
+                <div style={{fontSize:48,marginBottom:12}}>&#10003;</div>
+                <div style={{fontSize:16,fontWeight:600,color:"var(--green)",marginBottom:6}}>All Tasks Complete for {d.company}!</div>
+                <div style={{fontSize:13,color:"var(--muted2)"}}>Great job processing this delivery.</div>
+              </div>
+            ) : myDeliveryRole && deliveryTaskTemplates.length > 0 ? (
+              <>
                 <div style={{marginBottom:16}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-                    <span style={{fontSize:13,fontWeight:500}}>{deliveryCompleted}/{myDeliveryTasks.length} completed</span>
-                    <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(myDeliveryTasks.length > 0 ? (deliveryCompleted / myDeliveryTasks.length) * 100 : 0) + "%",background:"var(--purple)",borderRadius:2,transition:"width .3s"}} /></div>
+                    <span style={{fontSize:13,fontWeight:500}}>{dCompleted}/{deliveryTaskTemplates.length} completed</span>
+                    <div style={{flex:1,height:4,background:"var(--bg5)",borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:(deliveryTaskTemplates.length > 0 ? (dCompleted / deliveryTaskTemplates.length) * 100 : 0) + "%",background:"var(--purple)",borderRadius:2,transition:"width .3s"}} /></div>
                   </div>
                 </div>
-              )}
+                {deliveryTaskTemplates.map((t, idx) => renderTaskCard(t, idx, deliveryTaskTemplates, d.id))}
+              </>
+            ) : !myDeliveryRole ? (
+              <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
+                No delivery role assigned. Ask your admin to assign a delivery role in the schedule.
+              </div>
+            ) : (
+              <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
+                No delivery tasks configured. Ask your admin to add delivery tasks in the Tasks tab.
+              </div>
+            )}
+          </div>
+        );
+      })}
 
-              {myDeliveryRole ? (
-                myDeliveryTasks.map((t, idx) => renderTaskCard(t, idx, myDeliveryTasks))
-              ) : (
-                <div style={{color:"var(--muted2)",fontSize:12,textAlign:"center",padding:"20px 0"}}>
-                  No delivery role assigned to you for today. Ask your admin to assign a delivery role in the schedule.
-                </div>
-              )}
-            </>
-          ) : deliveryTasksDone ? (
-            <div style={{textAlign:"center",padding:"40px 0"}}>
-              <div style={{fontSize:48,marginBottom:12}}>&#10003;</div>
-              <div style={{fontSize:16,fontWeight:600,color:"var(--green)",marginBottom:6}}>All Delivery Tasks Complete!</div>
-              <div style={{fontSize:13,color:"var(--muted2)"}}>Great job processing the delivery.</div>
-            </div>
-          ) : (
-            <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted2)",fontSize:13}}>
-              <div style={{fontSize:36,marginBottom:12,opacity:.4}}>&#128666;</div>
-              No pending deliveries right now.<br/>
-              <span style={{fontSize:12}}>Tasks will appear here when a vendor checks in.</span>
-            </div>
-          )}
+      {/* Show empty state if on a delivery tab but no deliveries */}
+      {activeSection !== "daily" && activeDeliveries.length === 0 && (
+        <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted2)",fontSize:13}}>
+          <div style={{fontSize:36,marginBottom:12,opacity:.4}}>&#128666;</div>
+          No pending deliveries right now.<br/>
+          <span style={{fontSize:12}}>Delivery tabs will appear when vendors check in.</span>
         </div>
       )}
 
@@ -2170,12 +2242,12 @@ function EmpTasks({ employee, tasks, schedule }) {
             <div style={{fontSize:40,marginBottom:10}}>&#9200;</div>
             <div className="modal-title" style={{textAlign:"center"}}>&ldquo;{completeModal.title}&rdquo;<br/><span style={{fontSize:13,color:"var(--muted2)",fontWeight:400}}>Time is up!</span></div>
             <div style={{fontSize:14,color:"var(--muted3)",marginBottom:18}}>Did you complete this task?</div>
-            <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14}} onClick={() => markDone(completeModal.id)}>&#10003; Yes, task complete</button>
+            <button className="btn primary" style={{width:"100%",padding:"14px",fontSize:14}} onClick={() => markDone(completeModal._key)}>&#10003; Yes, task complete</button>
             <div style={{fontSize:12,color:"var(--muted2)",margin:"14px 0 8px"}}>Need more time?</div>
-            {isModalDelivery ? (
-              <div className="complete-options">{[5,15,30].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
+            {completeModal._isDelivery ? (
+              <div className="complete-options">{[5,15,30].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
             ) : (
-              <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal.id, m)}>+{m} min</div>)}</div>
+              <div className="complete-options">{[2,5,10].map(m => <div key={m} className="time-opt" onClick={() => addTime(completeModal._key, m)}>+{m} min</div>)}</div>
             )}
           </div>
         </div>
@@ -2294,7 +2366,10 @@ export default function App() {
               }
             } catch {}
             // Set pending delivery to trigger employee tasks
-            localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company, time: timeStr, id: delivery.id || uid() }));
+            const pdItem = { company, time: timeStr, id: delivery.id || uid() };
+            localStorage.setItem("crewos_pending_delivery", JSON.stringify(pdItem));
+            const pdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
+            if (!pdArr.some(d => d.id === pdItem.id)) { pdArr.push(pdItem); localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pdArr)); }
           }
         });
       }
@@ -2309,10 +2384,10 @@ export default function App() {
           const [latestKey, latest] = recent.sort((a, b) => b[1].timestamp - a[1].timestamp)[0];
           if (!fbSeenIds.has("pd_" + latestKey)) {
             fbSeenIds.add("pd_" + latestKey);
-            const existing = localStorage.getItem("crewos_pending_delivery");
-            if (!existing || !JSON.parse(existing).id || JSON.parse(existing).id !== latest.id) {
-              localStorage.setItem("crewos_pending_delivery", JSON.stringify({ company: latest.company, time: latest.time, id: latest.id || uid() }));
-            }
+            const pdItem2 = { company: latest.company, time: latest.time, id: latest.id || uid() };
+            localStorage.setItem("crewos_pending_delivery", JSON.stringify(pdItem2));
+            const pdArr2 = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
+            if (!pdArr2.some(d => d.id === pdItem2.id)) { pdArr2.push(pdItem2); localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pdArr2)); }
           }
         }
       }
