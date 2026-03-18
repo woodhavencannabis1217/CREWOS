@@ -768,8 +768,19 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
     toast.show("Schedule reopened for editing", "warning");
   };
 
-  // Count scheduled employees this week
-  const scheduledCount = () => {
+  // Delivery roles per employee per week
+  const [deliveryRoles, setDeliveryRoles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_delivery_roles")) || {}; } catch { return {}; }
+  });
+  useEffect(() => { localStorage.setItem("crewos_delivery_roles", JSON.stringify(deliveryRoles)); }, [deliveryRoles]);
+
+  const getDeliveryRole = (empId) => deliveryRoles[weekStart + "_" + empId] || "";
+  const setDeliveryRole = (empId, role) => {
+    setDeliveryRoles(prev => ({ ...prev, [weekStart + "_" + empId]: role }));
+  };
+
+  // Get unique scheduled employees this week
+  const getScheduledEmps = () => {
     const emps = new Set();
     shifts.forEach(shift => {
       for (let d = 0; d < 7; d++) {
@@ -777,8 +788,10 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         if (c.empId) emps.add(c.empId);
       }
     });
-    return emps.size;
+    return emps;
   };
+
+  const scheduledCount = () => getScheduledEmps().size;
 
   return (
     <div>
@@ -874,6 +887,41 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
           </tbody>
         </table>
       </div>
+
+      {/* Delivery Role Assignment */}
+      {(() => {
+        const empIds = [...getScheduledEmps()];
+        if (empIds.length === 0) return null;
+        return (
+          <div style={{marginTop:16,padding:"14px 18px",background:"rgba(124,58,237,.04)",borderRadius:12,border:"1px solid rgba(124,58,237,.12)"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--purple)",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:15}}>&#128666;</span> Delivery Roles
+              <span style={{fontSize:11,fontWeight:400,color:"var(--muted2)",marginLeft:4}}>— Assigned when a vendor checks in</span>
+            </div>
+            <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+              {empIds.map(empId => {
+                const emp = nonAdmin.find(e => e.id === empId);
+                if (!emp) return null;
+                const role = getDeliveryRole(empId);
+                return (
+                  <div key={empId} style={{display:"flex",alignItems:"center",gap:8,background:"var(--bg2)",padding:"6px 12px",borderRadius:8,border:"1px solid var(--border)"}}>
+                    <span style={{fontSize:12,fontWeight:500}}>{emp.name}</span>
+                    <select value={role} onChange={e => setDeliveryRole(empId, e.target.value)} disabled={isSubmitted}
+                      style={{fontSize:11,padding:"4px 6px",borderRadius:6,fontWeight:600,
+                        color:role==="A"?"var(--purple)":role==="B"?"var(--blue)":"var(--muted)",
+                        background:role==="A"?"rgba(124,58,237,.08)":role==="B"?"rgba(37,99,235,.08)":"var(--bg2)",
+                        opacity:isSubmitted?.7:1}}>
+                      <option value="">No role</option>
+                      <option value="A">Role A</option>
+                      <option value="B">Role B</option>
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{display:"flex",gap:10,marginTop:12,alignItems:"center",flexWrap:"wrap"}}>
         {!isSubmitted && (
@@ -1767,18 +1815,16 @@ function EmpTasks({ employee, tasks, schedule }) {
 
   // Determine employee's delivery role from schedule
   const weekStart = getWeekStart();
-  const todayDow = new Date().getDay();
-  const dayIdx = todayDow === 0 ? 6 : todayDow - 1; // Mon=0..Sun=6
   let myDeliveryRole = "";
   try {
-    const rows = JSON.parse(localStorage.getItem("crewos_sched_rows_" + weekStart)) || [];
-    const myRow = rows.find(r => r.empId === employee.id);
-    if (myRow && myRow.deliveryRole) {
-      myDeliveryRole = myRow.deliveryRole;
+    const roles = JSON.parse(localStorage.getItem("crewos_delivery_roles")) || {};
+    const roleKey = weekStart + "_" + employee.id;
+    if (roles[roleKey]) {
+      myDeliveryRole = roles[roleKey];
     } else {
-      // If not explicitly assigned, check if the other employee has a role, and take the remaining one
-      const otherRows = rows.filter(r => r.empId && r.empId !== employee.id);
-      const otherRoles = otherRows.map(r => r.deliveryRole).filter(Boolean);
+      // Fallback: if not explicitly assigned, check if other employees have roles
+      const allKeys = Object.keys(roles).filter(k => k.startsWith(weekStart + "_") && !k.endsWith("_" + employee.id));
+      const otherRoles = allKeys.map(k => roles[k]).filter(Boolean);
       if (otherRoles.includes("A") && !otherRoles.includes("B")) myDeliveryRole = "B";
       else if (otherRoles.includes("B") && !otherRoles.includes("A")) myDeliveryRole = "A";
     }
