@@ -2904,19 +2904,52 @@ export default function App() {
 
   useEffect(() => {
     const fbUrl = settings.firebaseUrl;
-    if (!fbUrl || fbSyncRef.current.pushing) return;
-    // Debounce: don't push more than once per second
-    const now = Date.now();
-    if (now - fbSyncRef.current.lastPush < 1000) return;
-    fbSyncRef.current.lastPush = now;
-    fbSyncRef.current.pushing = true;
+    if (!fbUrl) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
       notifications, drawerLogs, shiftNotes,
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
+    // If already pushing, queue this push so it runs after the current one finishes
+    if (fbSyncRef.current.pushing) {
+      fbSyncRef.current.pendingPush = pushData;
+      return;
+    }
+    // Debounce: don't push more than once per second, but schedule a delayed push so data isn't lost
+    const now = Date.now();
+    const timeSinceLast = now - fbSyncRef.current.lastPush;
+    if (timeSinceLast < 1000) {
+      if (fbSyncRef.current.debounceTimer) clearTimeout(fbSyncRef.current.debounceTimer);
+      fbSyncRef.current.debounceTimer = setTimeout(() => {
+        fbSyncRef.current.pendingPush = null;
+        fbSyncRef.current.lastPush = Date.now();
+        fbSyncRef.current.pushing = true;
+        firebaseSet(fbUrl, "crewos_data", pushData).then(() => {
+          fbSyncRef.current.pushing = false;
+          // If another push queued while we were pushing, fire it now
+          if (fbSyncRef.current.pendingPush) {
+            const queued = fbSyncRef.current.pendingPush;
+            fbSyncRef.current.pendingPush = null;
+            fbSyncRef.current.pushing = true;
+            fbSyncRef.current.lastPush = Date.now();
+            firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
+          }
+        });
+      }, 1000 - timeSinceLast);
+      return;
+    }
+    fbSyncRef.current.lastPush = now;
+    fbSyncRef.current.pushing = true;
     firebaseSet(fbUrl, "crewos_data", pushData).then(() => {
       fbSyncRef.current.pushing = false;
+      // If another push queued while we were pushing, fire it now
+      if (fbSyncRef.current.pendingPush) {
+        const queued = fbSyncRef.current.pendingPush;
+        fbSyncRef.current.pendingPush = null;
+        fbSyncRef.current.pushing = true;
+        fbSyncRef.current.lastPush = Date.now();
+        firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
+      }
     });
   }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes]);
 
