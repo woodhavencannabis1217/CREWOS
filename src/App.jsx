@@ -410,7 +410,10 @@ function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, on
       })()
     : null;
 
-  const totalAmount = (parseFloat(cashAmount) || 0) + (parseFloat(coinAmount) || 0);
+  // Coin amount: if previous close exists, auto-fill from last shift (coins carry forward)
+  const hasCarryOverCoins = isOpen && lastClose && lastClose.coinAmount > 0;
+  const effectiveCoinAmount = hasCarryOverCoins ? lastClose.coinAmount : (parseFloat(coinAmount) || 0);
+  const totalAmount = (parseFloat(cashAmount) || 0) + effectiveCoinAmount;
 
   const submit = () => {
     if (isNaN(totalAmount) || totalAmount < 0) return;
@@ -418,7 +421,7 @@ function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, on
     onSubmit({
       amount: totalAmount,
       cashAmount: parseFloat(cashAmount) || 0,
-      coinAmount: parseFloat(coinAmount) || 0,
+      coinAmount: effectiveCoinAmount,
       cashierNum: isOpen ? cashierNum : (lastDrawerForRegister?.cashierNum || ""),
       type,
       employeeId: employee.id,
@@ -436,7 +439,7 @@ function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, on
         </div>
         <div style={{fontSize:12,color:"var(--muted2)",marginBottom:18}}>
           {isOpen
-            ? "Count the cash drawer and enter the amounts below."
+            ? "Count the bills in the drawer and enter the amount below."
             : "Count the cash drawer and enter the amounts to close your shift."}
         </div>
         {isOpen && (
@@ -455,7 +458,7 @@ function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, on
           </div>
         )}
         <div className="form-group">
-          <label>Bills ($)</label>
+          <label>Bills ($) &mdash; <span style={{fontSize:11,color:"var(--muted2)",fontWeight:400}}>count manually</span></label>
           <input
             type="number"
             step="0.01"
@@ -467,26 +470,47 @@ function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, on
             autoFocus
           />
         </div>
-        <div className="form-group">
-          <label style={{display:"flex",alignItems:"center",gap:6}}>
-            Coins ($)
-            {isOpen && lastClose && lastClose.coinAmount > 0 && (
-              <span style={{fontSize:11,color:"var(--muted2)",fontWeight:400}}>
-                &mdash; previous shift had ${lastClose.coinAmount.toFixed(2)} in coins
-              </span>
-            )}
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            value={coinAmount}
-            onChange={e => setCoinAmount(e.target.value)}
-            placeholder="0.00"
-            className="drawer-amount"
-          />
-        </div>
-        {(cashAmount || coinAmount) && (
+        {isOpen && hasCarryOverCoins ? (
+          /* Coins carry forward from previous shift — shown, not editable */
+          <div style={{background:"var(--bg4)",borderRadius:10,padding:"12px 16px",marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:12,color:"var(--muted2)",marginBottom:2}}>Coins (from previous shift)</div>
+                <div style={{fontSize:18,fontWeight:600,fontFamily:"var(--mono)"}}>${effectiveCoinAmount.toFixed(2)}</div>
+              </div>
+              <span style={{fontSize:10,color:"var(--muted2)",background:"rgba(22,163,74,.08)",padding:"3px 8px",borderRadius:20,color:"var(--green)"}}>Auto-filled</span>
+            </div>
+          </div>
+        ) : isOpen && cashierNum && !lastClose ? (
+          /* No previous close — first person counts coins */
+          <div className="form-group">
+            <label>Coins ($) &mdash; <span style={{fontSize:11,color:"var(--amber)",fontWeight:400}}>no previous record, please count</span></label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={coinAmount}
+              onChange={e => setCoinAmount(e.target.value)}
+              placeholder="0.00"
+              className="drawer-amount"
+            />
+          </div>
+        ) : !isOpen ? (
+          /* Closing — always count both bills and coins */
+          <div className="form-group">
+            <label>Coins ($) &mdash; <span style={{fontSize:11,color:"var(--muted2)",fontWeight:400}}>count manually</span></label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={coinAmount}
+              onChange={e => setCoinAmount(e.target.value)}
+              placeholder="0.00"
+              className="drawer-amount"
+            />
+          </div>
+        ) : null}
+        {(cashAmount || effectiveCoinAmount > 0) && (
           <div style={{textAlign:"center",padding:"10px 0",fontSize:14,fontWeight:600,color:"var(--text)",background:"var(--bg4)",borderRadius:10,marginBottom:8}}>
             Total: ${totalAmount.toFixed(2)}
           </div>
