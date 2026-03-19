@@ -396,21 +396,30 @@ function PinLogin({ onLogin, employees }) {
 }
 
 // ─── CASH DRAWER MODAL ───────────────────────────────────────────────────────
-function CashDrawerModal({ type, employee, lastDrawer, onSubmit, onCancel }) {
-  const [amount, setAmount] = useState("");
+function CashDrawerModal({ type, employee, lastDrawerForRegister, drawerLogs, onSubmit, onCancel }) {
+  const [cashAmount, setCashAmount] = useState("");
+  const [coinAmount, setCoinAmount] = useState("");
   const [cashierNum, setCashierNum] = useState("");
   const isOpen = type === "open";
 
-  const hasDiscrepancy = isOpen && lastDrawer && lastDrawer.closeAmount !== undefined;
-  const discrepancyAmt = hasDiscrepancy ? (parseFloat(amount || 0) - lastDrawer.closeAmount) : 0;
+  // Find last close for the selected register
+  const lastClose = isOpen && cashierNum
+    ? (() => {
+        const closes = drawerLogs.filter(l => l.type === "close" && l.cashierNum === cashierNum);
+        return closes.length > 0 ? closes[closes.length - 1] : null;
+      })()
+    : null;
+
+  const totalAmount = (parseFloat(cashAmount) || 0) + (parseFloat(coinAmount) || 0);
 
   const submit = () => {
-    const val = parseFloat(amount);
-    if (isNaN(val) || val < 0) return;
+    if (isNaN(totalAmount) || totalAmount < 0) return;
     if (isOpen && !cashierNum.trim()) return;
     onSubmit({
-      amount: val,
-      cashierNum: isOpen ? cashierNum : lastDrawer?.cashierNum || "",
+      amount: totalAmount,
+      cashAmount: parseFloat(cashAmount) || 0,
+      coinAmount: parseFloat(coinAmount) || 0,
+      cashierNum: isOpen ? cashierNum : (lastDrawerForRegister?.cashierNum || ""),
       type,
       employeeId: employee.id,
       employeeName: employee.name,
@@ -427,8 +436,8 @@ function CashDrawerModal({ type, employee, lastDrawer, onSubmit, onCancel }) {
         </div>
         <div style={{fontSize:12,color:"var(--muted2)",marginBottom:18}}>
           {isOpen
-            ? "Count the cash drawer and enter the total before starting your shift."
-            : "Count the cash drawer and enter the total to close your shift."}
+            ? "Count the cash drawer and enter the amounts below."
+            : "Count the cash drawer and enter the amounts to close your shift."}
         </div>
         {isOpen && (
           <div className="form-group">
@@ -446,36 +455,50 @@ function CashDrawerModal({ type, employee, lastDrawer, onSubmit, onCancel }) {
           </div>
         )}
         <div className="form-group">
-          <label>Cash Amount ($)</label>
+          <label>Bills ($)</label>
           <input
             type="number"
             step="0.01"
             min="0"
-            value={amount}
-            onChange={e => setAmount(e.target.value)}
+            value={cashAmount}
+            onChange={e => setCashAmount(e.target.value)}
             placeholder="0.00"
             className="drawer-amount"
             autoFocus
           />
         </div>
-        {isOpen && hasDiscrepancy && amount && parseFloat(amount) > 0 && (
-          Math.abs(discrepancyAmt) > 0.01 ? (
-            <div className="drawer-discrepancy">
-              <strong>Discrepancy detected:</strong> Previous shift closed at ${lastDrawer.closeAmount.toFixed(2)},
-              but you counted ${parseFloat(amount).toFixed(2)}.
-              Difference: <strong>${Math.abs(discrepancyAmt).toFixed(2)}</strong>
-              {discrepancyAmt > 0 ? " over" : " short"}.
-              Admin will be notified.
-            </div>
-          ) : (
-            <div className="drawer-match">
-              &#10003; Matches previous closing count of ${lastDrawer.closeAmount.toFixed(2)}
-            </div>
-          )
+        <div className="form-group">
+          <label style={{display:"flex",alignItems:"center",gap:6}}>
+            Coins ($)
+            {isOpen && lastClose && lastClose.coinAmount > 0 && (
+              <span style={{fontSize:11,color:"var(--muted2)",fontWeight:400}}>
+                &mdash; previous shift had ${lastClose.coinAmount.toFixed(2)} in coins
+              </span>
+            )}
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={coinAmount}
+            onChange={e => setCoinAmount(e.target.value)}
+            placeholder="0.00"
+            className="drawer-amount"
+          />
+        </div>
+        {(cashAmount || coinAmount) && (
+          <div style={{textAlign:"center",padding:"10px 0",fontSize:14,fontWeight:600,color:"var(--text)",background:"var(--bg4)",borderRadius:10,marginBottom:8}}>
+            Total: ${totalAmount.toFixed(2)}
+          </div>
+        )}
+        {isOpen && cashierNum && !lastClose && (
+          <div style={{fontSize:11,color:"var(--muted2)",textAlign:"center",fontStyle:"italic",marginBottom:8}}>
+            No previous closing record for {cashierNum}
+          </div>
         )}
         <div className="modal-actions">
           {onCancel && <button className="btn" onClick={onCancel}>Cancel</button>}
-          <button className="btn primary" onClick={submit} disabled={!amount || parseFloat(amount) < 0 || (isOpen && !cashierNum.trim())}>
+          <button className="btn primary" onClick={submit} disabled={(!cashAmount && !coinAmount) || (isOpen && !cashierNum.trim())}>
             {isOpen ? "Start Shift" : "Close & Clock Out"}
           </button>
         </div>
@@ -3070,7 +3093,9 @@ export default function App() {
   };
 
   const handleDrawerOpenSubmit = (drawerData) => {
-    const lastClose = getLastDrawerClose();
+    // Find last close for THIS specific register
+    const registerCloses = drawerLogs.filter(l => l.type === "close" && l.cashierNum === drawerData.cashierNum);
+    const lastClose = registerCloses.length > 0 ? registerCloses[registerCloses.length - 1] : null;
     let discrepancy = false;
     let discrepancyAmount = 0;
 
@@ -3081,8 +3106,8 @@ export default function App() {
         const timeStr = new Date().toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
         setNotifications(prev => [{
           id: uid(), type: "drawer",
-          title: "Cash drawer discrepancy",
-          desc: user.name + " opened " + drawerData.cashierNum + " at $" + drawerData.amount.toFixed(2) + " but previous close was $" + lastClose.closeAmount.toFixed(2) + ". Difference: $" + Math.abs(discrepancyAmount).toFixed(2) + (discrepancyAmount > 0 ? " over" : " short"),
+          title: "Cash drawer discrepancy — " + drawerData.cashierNum,
+          desc: user.name + " counted $" + drawerData.amount.toFixed(2) + " but " + lastClose.employeeName + " closed at $" + lastClose.closeAmount.toFixed(2) + ". Difference: $" + Math.abs(discrepancyAmount).toFixed(2) + (discrepancyAmount > 0 ? " over" : " short"),
           time: timeStr
         }, ...prev]);
       }
@@ -3206,10 +3231,10 @@ export default function App() {
       </div>
 
       {/* Cash Drawer - Opening */}
-      {showDrawerOpen && <CashDrawerModal type="open" employee={user} lastDrawer={getLastDrawerClose()} onSubmit={handleDrawerOpenSubmit} />}
+      {showDrawerOpen && <CashDrawerModal type="open" employee={user} drawerLogs={drawerLogs} onSubmit={handleDrawerOpenSubmit} />}
 
       {/* Cash Drawer - Closing */}
-      {showDrawerClose && <CashDrawerModal type="close" employee={user} lastDrawer={drawerLogs.filter(l=>l.employeeId===user.id&&l.type==="open").slice(-1)[0]} onSubmit={handleDrawerCloseSubmit} onCancel={() => setShowDrawerClose(false)} />}
+      {showDrawerClose && <CashDrawerModal type="close" employee={user} lastDrawerForRegister={drawerLogs.filter(l=>l.employeeId===user.id&&l.type==="open").slice(-1)[0]} drawerLogs={drawerLogs} onSubmit={handleDrawerCloseSubmit} onCancel={() => setShowDrawerClose(false)} />}
 
       {/* Shift Handoff Note */}
       {showShiftNote && <ShiftNoteModal employee={user} onSubmit={handleShiftNoteSubmit} onSkip={handleShiftNoteSkip} />}
