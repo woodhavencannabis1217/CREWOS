@@ -372,7 +372,7 @@ function PinLogin({ onLogin, employees }) {
   return (
     <div className="login-wrap">
       <div className="login-box">
-        <div className="login-logo"><span>Crew</span><em>OS</em></div>
+        <div className="login-logo"><span>Woodhaven</span><em>OS</em></div>
         <div className="login-sub">Enter your 4-digit PIN</div>
         <div className="pin-dots" style={shake ? {animation:"shake .3s"} : {}}>
           {[0,1,2,3].map(i => (
@@ -1882,7 +1882,7 @@ function VendorFormPage() {
       <div style={{minHeight:"100vh",background:"var(--bg)",padding:20}}>
         <div style={{maxWidth:500,margin:"0 auto"}}>
           <div style={{textAlign:"center",marginBottom:24}}>
-            <div className="login-logo" style={{marginBottom:4}}><span>Crew</span><em>OS</em></div>
+            <div className="login-logo" style={{marginBottom:4}}><span>Woodhaven</span><em>OS</em></div>
             <div style={{fontSize:18,fontWeight:600,marginBottom:4}}>Vendor Delivery Check-In</div>
             <div style={{fontSize:13,color:"var(--muted2)"}}>Please fill out this form to log your delivery.</div>
           </div>
@@ -1903,7 +1903,7 @@ function VendorFormPage() {
               {submitting ? "Submitting..." : "Submit Delivery"}
             </button>
           </div>
-          <div style={{textAlign:"center",marginTop:16,fontSize:11,color:"var(--muted)"}}>Powered by CrewOS</div>
+          <div style={{textAlign:"center",marginTop:16,fontSize:11,color:"var(--muted)"}}>Powered by Woodhaven OS</div>
         </div>
       </div>
     </>
@@ -3396,7 +3396,7 @@ export default function App() {
       <style>{CSS}</style>
       <div className="app">
         <div className="topbar">
-          <div className="logo"><span>Crew</span><em>OS</em></div>
+          <div className="logo"><span>Woodhaven</span><em>OS</em></div>
           <div className="topbar-right">
             <div className="live-time">{liveTime}</div>
             <div className="user-chip" onClick={() => setUser(null)}>
