@@ -2217,6 +2217,14 @@ function AdminSettings({ settings, setSettings }) {
         </>}
       </div>
 
+      <div className="sec-head">Cash Drawer</div>
+      <div className="card">
+        <div className="setting-row" style={{borderBottom:"none"}}>
+          <div><div className="setting-label">Enable cash drawer</div><div className="setting-sub">Require staff to count the cash drawer when clocking in and out</div></div>
+          <div className={"toggle"+(settings.drawerEnabled !== false?" on":"")} onClick={() => setSettings(s=>({...s,drawerEnabled:s.drawerEnabled === false ? true : false}))}><div className="toggle-knob" /></div>
+        </div>
+      </div>
+
       <div className="sec-head">Clock-In Rules</div>
       <div className="card">
         <div className="setting-row">
@@ -3226,8 +3234,10 @@ export default function App() {
     }
 
     toast.show("Clocked in!");
-    // Then show cash drawer opening screen
-    setShowDrawerOpen(true);
+    // Then show cash drawer opening screen (if enabled)
+    if (settings.drawerEnabled !== false) {
+      setShowDrawerOpen(true);
+    }
   };
 
   const handleClockIn = () => {
@@ -3301,8 +3311,16 @@ export default function App() {
     toast.show("Drawer counted!");
   };
 
-  // CLOCK OUT FLOW: user clicks Clock Out -> show cash drawer close -> shift note -> clock out
-  const handleClockOut = () => setShowDrawerClose(true);
+  // CLOCK OUT FLOW: user clicks Clock Out -> show cash drawer close (if enabled) -> shift note -> clock out
+  const handleClockOut = () => {
+    if (settings.drawerEnabled !== false) {
+      setShowDrawerClose(true);
+    } else {
+      // Skip drawer, go straight to shift note
+      setPendingClockOut(true);
+      setShowShiftNote(true);
+    }
+  };
 
   const handleDrawerCloseSubmit = (drawerData) => {
     setDrawerLogs(prev => [...prev, { ...drawerData, closeAmount: drawerData.amount }]);
@@ -3370,7 +3388,7 @@ export default function App() {
   if (!user) return (<><style>{CSS}</style><PinLogin onLogin={setUser} employees={employees} />{toast.el}</>);
 
   const isAdmin = user.role === "admin";
-  const adminTabs = [["schedule","Schedule"],["employees","Staff"],["payroll","Payroll"],["tasks","Tasks"],["vendor","Vendor"],["drawer","Drawer"],["alerts","Alerts"],["settings","Settings"]];
+  const adminTabs = [["schedule","Schedule"],["employees","Staff"],["payroll","Payroll"],["tasks","Tasks"],["vendor","Vendor"],["alerts","Alerts"],["settings","Settings"]].concat(settings.drawerEnabled !== false ? [["drawer","Drawer"]] : []);
   const empTabs = [["schedule","My Schedule"],["hours","My Hours"],["tasks","My Tasks"]];
 
   return (
