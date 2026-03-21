@@ -3159,7 +3159,7 @@ export default function App() {
         firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
       }
     });
-  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes]);
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, settings]);
 
   // Pull data from Firebase on load + poll for changes
   useEffect(() => {
