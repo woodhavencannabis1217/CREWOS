@@ -729,6 +729,13 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const isSubmitted = !!submittedWeeks[weekStart];
   const submittedAt = submittedWeeks[weekStart] || null;
 
+  // Payroll history — snapshot saved each time a schedule is submitted
+  const [payrollHistory, setPayrollHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("crewos_payroll_history")) || []; } catch { return []; }
+  });
+  useEffect(() => { localStorage.setItem("crewos_payroll_history", JSON.stringify(payrollHistory)); }, [payrollHistory]);
+  const [showHistory, setShowHistory] = useState(false);
+
   // Shift rows stored per week — no employee column, each cell is independent
   const loadShifts = (ws) => {
     try { return JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || []; } catch { return []; }
@@ -835,6 +842,40 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
       }, ...prev]);
     });
     setSubmittedWeeks(prev => ({ ...prev, [weekStart]: now.toISOString() }));
+
+    // Save payroll snapshot to history
+    const empPayData = [];
+    const empHoursMap = {};
+    const empDaysMap = {};
+    shifts.forEach(shift => {
+      for (let d = 0; d < 7; d++) {
+        const c = getCell(shift.id, d);
+        if (c.empId) {
+          const hrs = calcShiftHours(c.start, c.end);
+          empHoursMap[c.empId] = (empHoursMap[c.empId] || 0) + hrs;
+          if (!empDaysMap[c.empId]) empDaysMap[c.empId] = new Set();
+          empDaysMap[c.empId].add(d);
+        }
+      }
+    });
+    nonAdmin.forEach(emp => {
+      if (empHoursMap[emp.id]) {
+        empPayData.push({ name: emp.name, hours: empHoursMap[emp.id], days: empDaysMap[emp.id] ? empDaysMap[emp.id].size : 0, rate: emp.rate || 0, gross: empHoursMap[emp.id] * (emp.rate || 0) });
+      }
+    });
+    const totalHrs = empPayData.reduce((s, d) => s + d.hours, 0);
+    const totalGross = empPayData.reduce((s, d) => s + d.gross, 0);
+    setPayrollHistory(prev => [{
+      id: uid(),
+      weekStart,
+      weekLabel: formatDate(weekStart) + " – " + formatDate(addDays(weekStart, 6)),
+      submittedAt: now.toISOString(),
+      employees: empPayData,
+      totalHours: totalHrs,
+      totalGross,
+      employeeCount: empPayData.length,
+    }, ...prev]);
+
     toast.show("Schedule submitted! " + scheduledEmps.size + " employee(s) notified.");
   };
 
@@ -1114,6 +1155,98 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
           </div>
         );
       })()}
+
+      {/* ═══ PAYROLL HISTORY ═══ */}
+      <div style={{marginTop:30}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <div style={{fontSize:18,fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
+            Payroll History
+            {payrollHistory.length > 0 && <span style={{fontSize:12,fontWeight:400,color:"var(--muted2)",background:"var(--bg4)",padding:"2px 10px",borderRadius:20,border:"1px solid var(--border)"}}>{payrollHistory.length} record{payrollHistory.length!==1?"s":""}</span>}
+          </div>
+          {payrollHistory.length > 0 && (
+            <button className="btn small" onClick={() => setShowHistory(!showHistory)}>{showHistory ? "Hide" : "Show"} History</button>
+          )}
+        </div>
+
+        {payrollHistory.length === 0 && (
+          <div style={{color:"var(--muted2)",fontSize:13,padding:"30px 0",textAlign:"center",background:"var(--bg4)",borderRadius:12,border:"1px solid var(--border)"}}>
+            No payroll history yet. Submit a schedule to create the first record.
+          </div>
+        )}
+
+        {showHistory && payrollHistory.length > 0 && (
+          <div>
+            {/* Summary Table */}
+            <div className="card" style={{padding:0,overflow:"hidden",marginBottom:16}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:"#2c3e7f",color:"#fff"}}>
+                    <th style={{padding:"10px 14px",textAlign:"left"}}>Week</th>
+                    <th style={{padding:"10px 14px",textAlign:"center"}}>Submitted</th>
+                    <th style={{padding:"10px 14px",textAlign:"center"}}>Employees</th>
+                    <th style={{padding:"10px 14px",textAlign:"center"}}>Hours</th>
+                    <th style={{padding:"10px 14px",textAlign:"right"}}>Projected Payroll</th>
+                    <th style={{padding:"10px 14px",textAlign:"center",width:40}}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payrollHistory.map((rec, ri) => (
+                    <React.Fragment key={rec.id}>
+                      <tr style={{borderBottom:"1px solid var(--border)",cursor:"pointer",background:ri%2===0?"transparent":"var(--bg4)"}}
+                        onClick={() => setPayrollHistory(prev => prev.map(r => r.id === rec.id ? {...r, _expanded: !r._expanded} : r))}>
+                        <td style={{padding:"10px 14px",fontWeight:600}}>{rec.weekLabel}</td>
+                        <td style={{padding:"10px 14px",textAlign:"center",fontSize:11,color:"var(--muted2)"}}>{new Date(rec.submittedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</td>
+                        <td style={{padding:"10px 14px",textAlign:"center"}}>{rec.employeeCount}</td>
+                        <td style={{padding:"10px 14px",textAlign:"center"}}>{rec.totalHours}h</td>
+                        <td style={{padding:"10px 14px",textAlign:"right",fontWeight:700,color:"var(--green)"}}>${rec.totalGross.toFixed(2)}</td>
+                        <td style={{padding:"10px 14px",textAlign:"center",fontSize:16,color:"var(--muted2)"}}>{rec._expanded ? "\u25B2" : "\u25BC"}</td>
+                      </tr>
+                      {rec._expanded && (
+                        <tr>
+                          <td colSpan={6} style={{padding:"0 14px 14px",background:"var(--bg4)"}}>
+                            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10,paddingTop:10}}>
+                              {rec.employees.map((emp, ei) => {
+                                const ec = empColors[ei % empColors.length];
+                                return (
+                                  <div key={ei} style={{background:"var(--bg2)",borderRadius:10,padding:"10px 14px",borderLeft:"4px solid "+ec.border}}>
+                                    <div style={{fontWeight:600,color:ec.text,marginBottom:4}}>{emp.name}</div>
+                                    <div style={{display:"flex",gap:16,fontSize:12,color:"var(--muted)"}}>
+                                      <span>{emp.hours}h</span>
+                                      <span>{emp.days} day{emp.days!==1?"s":""}</span>
+                                      <span>${emp.rate.toFixed(2)}/hr</span>
+                                      <span style={{fontWeight:600,color:"var(--green)"}}>${emp.gross.toFixed(2)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Running Totals */}
+            {payrollHistory.length > 1 && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8}}>
+                {[
+                  { label:"Total Weeks on Record", val: payrollHistory.length, bg:"#1e3a5f", color:"#fff" },
+                  { label:"All-Time Scheduled Hours", val: payrollHistory.reduce((s,r) => s + r.totalHours, 0) + "h", bg:"#1e3a5f", color:"#fff" },
+                  { label:"All-Time Projected Payroll", val: "$" + payrollHistory.reduce((s,r) => s + r.totalGross, 0).toFixed(2), bg:"#166534", color:"#fff" },
+                ].map((t,i) => (
+                  <div key={i} style={{background:t.bg,color:t.color,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:11,opacity:.8,marginBottom:4}}>{t.label}</div>
+                    <div style={{fontSize:18,fontWeight:700}}>{t.val}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
