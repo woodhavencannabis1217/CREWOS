@@ -2336,7 +2336,7 @@ function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, on
 }
 
 // ─── EMPLOYEE: MY TASKS ──────────────────────────────────────────────────────
-function EmpTasks({ employee, tasks, schedule }) {
+function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
   const [activeSection, setActiveSection] = useState("daily");
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
@@ -2367,8 +2367,7 @@ function EmpTasks({ employee, tasks, schedule }) {
 
   // Poll for pending deliveries and update time
   useEffect(() => {
-    const iv = setInterval(() => {
-      setNow(new Date());
+    const checkDeliveries = () => {
       try {
         // Check old single key too (in case vendor form just wrote it)
         const oldSingle = localStorage.getItem("crewos_pending_delivery");
@@ -2395,9 +2394,50 @@ function EmpTasks({ employee, tasks, schedule }) {
           }
         }
       } catch {}
+    };
+
+    // Also poll Firebase directly for deliveries (cross-device)
+    const checkFirebase = async () => {
+      if (!firebaseUrl) return;
+      try {
+        const deliveryData = await firebaseGet(firebaseUrl, "deliveries");
+        if (deliveryData && typeof deliveryData === "object") {
+          const todayDeliveries = Object.values(deliveryData).filter(d =>
+            d && d.timestamp && (Date.now() - d.timestamp) < 24 * 60 * 60 * 1000
+          );
+          if (todayDeliveries.length > 0) {
+            setPendingDeliveries(prev => {
+              let updated = [...prev];
+              let changed = false;
+              todayDeliveries.forEach(delivery => {
+                const deliveryId = delivery.id || delivery.company + "_" + delivery.timestamp;
+                if (!updated.some(d => d.id === deliveryId) && !completedDeliveryIds.has(deliveryId)) {
+                  const company = delivery.company || "Unknown Vendor";
+                  const timeStr = delivery.time || "";
+                  updated.push({ company, time: timeStr, id: deliveryId });
+                  changed = true;
+                }
+              });
+              if (changed) {
+                localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
+                setActiveSection("delivery_" + updated[updated.length - 1].id);
+              }
+              return changed ? updated : prev;
+            });
+          }
+        }
+      } catch {}
+    };
+
+    const iv = setInterval(() => {
+      setNow(new Date());
+      checkDeliveries();
     }, 2000);
-    return () => clearInterval(iv);
-  }, [pendingDeliveries]);
+    // Poll Firebase every 5 seconds
+    checkFirebase();
+    const fbIv = setInterval(checkFirebase, 5000);
+    return () => { clearInterval(iv); clearInterval(fbIv); };
+  }, [pendingDeliveries, firebaseUrl, completedDeliveryIds]);
 
   // Determine employee's delivery role — fallback to staff role (A/B)
   const weekStart = getWeekStart();
@@ -3297,7 +3337,7 @@ export default function App() {
 
           {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
           {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} />}
-          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} />}
+          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} />}
         </div>
       </div>
 
