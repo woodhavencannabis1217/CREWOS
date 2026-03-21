@@ -1017,6 +1017,83 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
           Schedule must be submitted by Saturday 11:59 PM &middot; Employees receive 24hr minimum notice
         </div>
       )}
+
+      {/* ═══ SCHEDULED PAY SUMMARY ═══ */}
+      {(() => {
+        // Calculate scheduled hours per employee from the schedule grid
+        const empHoursMap = {};
+        const empDaysMap = {};
+        shifts.forEach(shift => {
+          for (let d = 0; d < 7; d++) {
+            const c = getCell(shift.id, d);
+            if (c.empId) {
+              const hrs = calcShiftHours(c.start, c.end);
+              empHoursMap[c.empId] = (empHoursMap[c.empId] || 0) + hrs;
+              if (!empDaysMap[c.empId]) empDaysMap[c.empId] = new Set();
+              empDaysMap[c.empId].add(d);
+            }
+          }
+        });
+
+        const scheduledEmps = nonAdmin.filter(e => empHoursMap[e.id] > 0);
+        if (scheduledEmps.length === 0) return null;
+
+        const payData = scheduledEmps.map(emp => {
+          const hrs = empHoursMap[emp.id] || 0;
+          const days = empDaysMap[emp.id] ? empDaysMap[emp.id].size : 0;
+          const gross = hrs * (emp.rate || 0);
+          return { emp, hrs, days, gross };
+        });
+
+        const totHrs = payData.reduce((s, d) => s + d.hrs, 0);
+        const totGross = payData.reduce((s, d) => s + d.gross, 0);
+
+        return (
+          <div style={{marginTop:24}}>
+            <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:18,fontWeight:700}}>Scheduled Pay Summary</div>
+              <span style={{fontSize:11,padding:"3px 10px",border:"1px solid var(--border)",borderRadius:20,color:"var(--muted2)"}}>Based on Schedule</span>
+            </div>
+
+            <div style={{background:"rgba(59,130,246,.06)",border:"1px solid rgba(59,130,246,.2)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#3b82f6"}}>
+              &#x1F4CB; This is the <strong>projected</strong> payroll based on the schedule above. Actual payroll (under the Payroll tab) is based on employee clock-in/clock-out times and may differ.
+            </div>
+
+            {/* Employee Pay Cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}}>
+              {payData.map(({ emp, hrs, days, gross }) => (
+                <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:"4px solid rgba(59,130,246,.5)"}}>
+                  <div style={{padding:"14px 16px"}}>
+                    <div style={{fontSize:16,fontWeight:700,color:"#3b82f6",marginBottom:8}}>{emp.name}</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:16,fontSize:13}}>
+                      <div>Hours: <strong>{hrs}</strong></div>
+                      <div>Days: <strong>{days}</strong></div>
+                      <div>Rate: <strong>${(emp.rate||0).toFixed(2)}/hr</strong></div>
+                    </div>
+                  </div>
+                  <div style={{borderTop:"1px solid var(--border)",padding:"10px 16px",background:"var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div><span style={{fontSize:13}}>Gross Pay: </span><strong style={{fontSize:16,color:"var(--green)"}}>${gross.toFixed(2)}</strong></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Totals Bar */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+              {[
+                { label:"Total Scheduled Hours", val: totHrs + "h", bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Employees", val: scheduledEmps.length, bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Projected Payroll", val: "$" + totGross.toFixed(2), bg:"#166534", color:"#fff" },
+              ].map((t,i) => (
+                <div key={i} style={{background:t.bg,color:t.color,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:11,opacity:.8,marginBottom:4}}>{t.label}</div>
+                  <div style={{fontSize:18,fontWeight:700}}>{t.val}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
