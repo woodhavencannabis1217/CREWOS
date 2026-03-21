@@ -2397,34 +2397,46 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
     };
 
     // Also poll Firebase directly for deliveries (cross-device)
+    // Check both "deliveries" and "pending_delivery" paths since vendor form pushes to both
     const checkFirebase = async () => {
       if (!firebaseUrl) return;
       try {
-        const deliveryData = await firebaseGet(firebaseUrl, "deliveries");
+        const [deliveryData, pendingData] = await Promise.all([
+          firebaseGet(firebaseUrl, "deliveries"),
+          firebaseGet(firebaseUrl, "pending_delivery")
+        ]);
+        // Merge deliveries from both paths
+        const allDeliveries = [];
         if (deliveryData && typeof deliveryData === "object") {
-          const todayDeliveries = Object.values(deliveryData).filter(d =>
-            d && d.timestamp && (Date.now() - d.timestamp) < 24 * 60 * 60 * 1000
-          );
-          if (todayDeliveries.length > 0) {
-            setPendingDeliveries(prev => {
-              let updated = [...prev];
-              let changed = false;
-              todayDeliveries.forEach(delivery => {
-                const deliveryId = delivery.id || delivery.company + "_" + delivery.timestamp;
-                if (!updated.some(d => d.id === deliveryId) && !completedDeliveryIds.has(deliveryId)) {
-                  const company = delivery.company || "Unknown Vendor";
-                  const timeStr = delivery.time || "";
-                  updated.push({ company, time: timeStr, id: deliveryId });
-                  changed = true;
-                }
-              });
-              if (changed) {
-                localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
-                setActiveSection("delivery_" + updated[updated.length - 1].id);
+          Object.values(deliveryData).forEach(d => { if (d && d.timestamp) allDeliveries.push(d); });
+        }
+        if (pendingData && typeof pendingData === "object") {
+          Object.values(pendingData).forEach(d => {
+            if (d && d.timestamp && !allDeliveries.some(e => e.id === d.id)) allDeliveries.push(d);
+          });
+        }
+        const todayDeliveries = allDeliveries.filter(d =>
+          (Date.now() - d.timestamp) < 24 * 60 * 60 * 1000
+        );
+        if (todayDeliveries.length > 0) {
+          setPendingDeliveries(prev => {
+            let updated = [...prev];
+            let changed = false;
+            todayDeliveries.forEach(delivery => {
+              const deliveryId = delivery.id || delivery.company + "_" + delivery.timestamp;
+              if (!updated.some(d => d.id === deliveryId) && !completedDeliveryIds.has(deliveryId)) {
+                const company = delivery.company || "Unknown Vendor";
+                const timeStr = delivery.time || "";
+                updated.push({ company, time: timeStr, id: deliveryId });
+                changed = true;
               }
-              return changed ? updated : prev;
             });
-          }
+            if (changed) {
+              localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
+              setActiveSection("delivery_" + updated[updated.length - 1].id);
+            }
+            return changed ? updated : prev;
+          });
         }
       } catch {}
     };
@@ -3023,16 +3035,27 @@ export default function App() {
         }
       }
 
-      // Also poll for vendor deliveries
-      const deliveryData = await firebaseGet(fbUrl, "deliveries");
+      // Also poll for vendor deliveries - check both "deliveries" and "pending_delivery" paths
+      const [deliveryData, pendingDeliveryData] = await Promise.all([
+        firebaseGet(fbUrl, "deliveries"),
+        firebaseGet(fbUrl, "pending_delivery")
+      ]);
+      // Merge entries from both paths
+      const allEntries = [];
       if (deliveryData && typeof deliveryData === "object") {
-        // Get already-known deliveries to avoid duplicates
+        Object.entries(deliveryData).forEach(([k, v]) => allEntries.push([k, v]));
+      }
+      if (pendingDeliveryData && typeof pendingDeliveryData === "object") {
+        Object.entries(pendingDeliveryData).forEach(([k, v]) => {
+          if (!allEntries.some(([, e]) => e.id === v.id)) allEntries.push([k, v]);
+        });
+      }
+      if (allEntries.length > 0) {
         const existingPdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]");
         const existingDeliveries = JSON.parse(localStorage.getItem("crewos_deliveries") || "[]");
-        Object.entries(deliveryData).forEach(([firebaseKey, delivery]) => {
-          if (fbSeenIds.has(firebaseKey)) return;
+        allEntries.forEach(([firebaseKey, delivery]) => {
+          if (!delivery || fbSeenIds.has(firebaseKey)) return;
           fbSeenIds.add(firebaseKey);
-          // Only process deliveries from today that aren't already tracked locally
           const deliveryId = delivery.id || firebaseKey;
           const isToday = delivery.timestamp && (Date.now() - delivery.timestamp) < 24 * 60 * 60 * 1000;
           const alreadyTracked = existingPdArr.some(d => d.id === deliveryId) || existingDeliveries.some(d => d.id === deliveryId);
@@ -3047,7 +3070,7 @@ export default function App() {
               time: timeStr,
             }, ...prev]);
             try {
-              const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries")) || [];
+              const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries") || "[]");
               if (!deliveries.some(d => d.id === deliveryId)) {
                 delivery.id = deliveryId;
                 deliveries.unshift(delivery);
