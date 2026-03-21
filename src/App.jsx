@@ -2986,10 +2986,17 @@ export default function App() {
       // Also poll for vendor deliveries
       const deliveryData = await firebaseGet(fbUrl, "deliveries");
       if (deliveryData && typeof deliveryData === "object") {
+        // Get already-known deliveries to avoid duplicates
+        const existingPdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]");
+        const existingDeliveries = JSON.parse(localStorage.getItem("crewos_deliveries") || "[]");
         Object.entries(deliveryData).forEach(([firebaseKey, delivery]) => {
           if (fbSeenIds.has(firebaseKey)) return;
           fbSeenIds.add(firebaseKey);
-          if (delivery.timestamp && delivery.timestamp > fbStartTime) {
+          // Only process deliveries from today that aren't already tracked locally
+          const deliveryId = delivery.id || firebaseKey;
+          const isToday = delivery.timestamp && (Date.now() - delivery.timestamp) < 24 * 60 * 60 * 1000;
+          const alreadyTracked = existingPdArr.some(d => d.id === deliveryId) || existingDeliveries.some(d => d.id === deliveryId);
+          if (isToday && !alreadyTracked) {
             const company = delivery.company || "Unknown Vendor";
             const timeStr = delivery.time || new Date().toLocaleString("en-US", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
             toast.show("\uD83D\uDCE6 Vendor delivery: " + company);
@@ -3001,15 +3008,16 @@ export default function App() {
             }, ...prev]);
             try {
               const deliveries = JSON.parse(localStorage.getItem("crewos_deliveries")) || [];
-              if (!deliveries.some(d => d.id === delivery.id)) {
+              if (!deliveries.some(d => d.id === deliveryId)) {
+                delivery.id = deliveryId;
                 deliveries.unshift(delivery);
                 localStorage.setItem("crewos_deliveries", JSON.stringify(deliveries));
               }
             } catch {}
-            const pdItem = { company, time: timeStr, id: delivery.id || uid() };
+            const pdItem = { company, time: timeStr, id: deliveryId };
             localStorage.setItem("crewos_pending_delivery", JSON.stringify(pdItem));
-            const pdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || [];
-            if (!pdArr.some(d => d.id === pdItem.id)) { pdArr.push(pdItem); localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pdArr)); }
+            const pdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]");
+            if (!pdArr.some(d => d.id === deliveryId)) { pdArr.push(pdItem); localStorage.setItem("crewos_pending_deliveries", JSON.stringify(pdArr)); }
           }
         });
       }
