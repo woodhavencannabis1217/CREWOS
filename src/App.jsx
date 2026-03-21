@@ -1799,7 +1799,13 @@ function VendorFormPage() {
       return saved;
     } catch { return DEFAULT_VENDOR_FIELDS; }
   });
-  const [form, setForm] = useState({});
+  const [form, setForm] = useState(() => {
+    const init = {};
+    (JSON.parse(localStorage.getItem("crewos_vendor_fields")) || DEFAULT_VENDOR_FIELDS).forEach(f => {
+      if (f.type.includes("Date")) init[f.name] = new Date().toISOString().split("T")[0];
+    });
+    return init;
+  });
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
