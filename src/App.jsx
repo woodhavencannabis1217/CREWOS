@@ -2984,7 +2984,22 @@ export default function App() {
       { id:"n2", type:"late", title:"Late clock-in: Marco", desc:"Marco clocked in 13 min late. Threshold: 5 min.", time:"Today 9:18 AM" },
     ]; } catch { return []; }
   });
-  const [settings, setSettings] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_settings")) || { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; } });
+  const [settings, setSettings] = useState(() => {
+    try {
+      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" };
+      const saved = JSON.parse(localStorage.getItem("crewos_settings")) || defaults;
+      // Allow Firebase URL to be set via URL parameter for easy setup on new devices
+      try {
+        const hashParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
+        const fbParam = hashParams.get("fb");
+        if (fbParam && !saved.firebaseUrl) {
+          saved.firebaseUrl = fbParam;
+          localStorage.setItem("crewos_settings", JSON.stringify(saved));
+        }
+      } catch {}
+      return saved;
+    } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; }
+  });
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
 
@@ -3023,6 +3038,7 @@ export default function App() {
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
       notifications, drawerLogs, shiftNotes,
+      settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
     // If already pushing, queue this push so it runs after the current one finishes
@@ -3073,14 +3089,23 @@ export default function App() {
     const fbUrl = settings.firebaseUrl;
     if (!fbUrl) return;
     let lastPulled = 0;
+    let isFirstPull = true;
 
     const pull = async () => {
       // Pull main data
       const data = await firebaseGet(fbUrl, "crewos_data");
       if (data && typeof data === "object" && data._lastUpdated) {
-        // Only apply if data is newer than what we last pulled AND not from us
-        if (data._lastUpdated > lastPulled && data._updatedBy !== (user?.id || "unknown")) {
+        // On first pull, always apply data (to bootstrap new devices)
+        // On subsequent pulls, only apply if newer and not from us
+        const shouldApply = isFirstPull || (data._lastUpdated > lastPulled && data._updatedBy !== (user?.id || "unknown"));
+        isFirstPull = false;
+        if (shouldApply) {
           lastPulled = data._lastUpdated;
+          // Sync settings (except firebaseUrl which is already set locally)
+          if (data.settings_data) {
+            const merged = { ...data.settings_data, firebaseUrl: fbUrl };
+            if (JSON.stringify(merged) !== JSON.stringify(settings)) setSettings(merged);
+          }
           if (data.employees && JSON.stringify(data.employees) !== JSON.stringify(employees)) setEmployees(data.employees);
           if (data.schedule && JSON.stringify(data.schedule) !== JSON.stringify(schedule)) setSchedule(data.schedule);
           if (data.clockLogs && JSON.stringify(data.clockLogs) !== JSON.stringify(clockLogs)) setClockLogs(data.clockLogs);
