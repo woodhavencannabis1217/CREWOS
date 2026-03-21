@@ -1981,6 +1981,55 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
               For now, use the "Open Vendor Form" button to test it in a new tab.
             </div>
           </div>
+          {/* ── Active Deliveries (removable) ── */}
+          {(() => {
+            const pdArr = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]");
+            if (pdArr.length === 0) return null;
+            return (
+              <div style={{marginTop:16}}>
+                <div className="sec-head">Active Deliveries ({pdArr.length})</div>
+                <div style={{fontSize:11,color:"var(--muted2)",marginBottom:10}}>These deliveries are currently visible to staff. Remove completed or test deliveries here.</div>
+                {pdArr.map(d => (
+                  <div className="vendor-entry" key={d.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div>
+                      <div style={{fontWeight:500,fontSize:13}}>{d.company}</div>
+                      <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>{d.time}</div>
+                    </div>
+                    <button className="btn small danger" onClick={() => {
+                      const updated = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]").filter(x => x.id !== d.id);
+                      localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
+                      // Also remove from Firebase pending_delivery
+                      if (fbUrl) {
+                        fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery.json")
+                          .then(r => r.json())
+                          .then(data => {
+                            if (data && typeof data === "object") {
+                              Object.entries(data).forEach(([key, val]) => {
+                                if (val && val.id === d.id) {
+                                  fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery/" + key + ".json", { method: "DELETE" }).catch(() => {});
+                                }
+                              });
+                            }
+                          }).catch(() => {});
+                      }
+                      toast.show("Delivery removed: " + d.company, "warning");
+                      // Force re-render
+                      setDeliveryLog(prev => [...prev]);
+                    }}>Remove</button>
+                  </div>
+                ))}
+                <button className="btn small" style={{marginTop:8,width:"100%"}} onClick={() => {
+                  localStorage.setItem("crewos_pending_deliveries", "[]");
+                  // Clear all from Firebase
+                  if (fbUrl) {
+                    fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery.json", { method: "DELETE" }).catch(() => {});
+                  }
+                  toast.show("All active deliveries cleared", "warning");
+                  setDeliveryLog(prev => [...prev]);
+                }}>Clear All Deliveries</button>
+              </div>
+            );
+          })()}
           {deliveryLog.length>0 && <div style={{marginTop:16}}>
             <div className="sec-head">Delivery Log ({deliveryLog.length})</div>
             {deliveryLog.slice(0,10).map(d => (
