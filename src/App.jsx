@@ -843,6 +843,22 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
     toast.show("Schedule reopened for editing", "warning");
   };
 
+  // Employee colors for schedule cells (same as payroll)
+  const empColors = [
+    { bg:"rgba(124,58,237,.12)", border:"rgba(124,58,237,.5)", text:"#7c3aed" },
+    { bg:"rgba(59,130,246,.12)", border:"rgba(59,130,246,.5)", text:"#3b82f6" },
+    { bg:"rgba(234,88,12,.12)", border:"rgba(234,88,12,.5)", text:"#ea580c" },
+    { bg:"rgba(22,163,74,.12)", border:"rgba(22,163,74,.5)", text:"#16a34a" },
+    { bg:"rgba(220,38,38,.12)", border:"rgba(220,38,38,.5)", text:"#dc2626" },
+    { bg:"rgba(245,158,11,.12)", border:"rgba(245,158,11,.5)", text:"#f59e0b" },
+    { bg:"rgba(6,182,212,.12)", border:"rgba(6,182,212,.5)", text:"#06b6d4" },
+    { bg:"rgba(236,72,153,.12)", border:"rgba(236,72,153,.5)", text:"#ec4899" },
+  ];
+  const getEmpColor = (empId) => {
+    const idx = nonAdmin.findIndex(e => e.id === empId);
+    return idx >= 0 ? empColors[idx % empColors.length] : null;
+  };
+
   // Delivery roles per employee per week
   const [deliveryRoles, setDeliveryRoles] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crewos_delivery_roles")) || {}; } catch { return {}; }
@@ -918,17 +934,18 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                   const hasEmp = !!c.empId;
                   const hrs = hasEmp ? calcShiftHours(c.start, c.end) : 0;
                   const emp = nonAdmin.find(e => e.id === c.empId);
+                  const ec = hasEmp ? getEmpColor(c.empId) : null;
                   return (
-                    <td key={di} style={{padding:"8px 5px",verticalAlign:"top",background:hasEmp?"rgba(22,163,74,.03)":"transparent"}}>
+                    <td key={di} style={{padding:"8px 5px",verticalAlign:"top",background:ec?ec.bg:"transparent"}}>
                       <div style={{display:"flex",flexDirection:"column",gap:4,minHeight:50}}>
                         <select
                           value={c.empId}
                           onChange={e => setCell(shift.id, di, { empId: e.target.value })}
                           disabled={isSubmitted}
                           style={{width:"100%",fontSize:11,padding:"5px 4px",fontWeight:600,borderRadius:6,
-                            border:"1px solid "+(hasEmp?"rgba(22,163,74,.3)":"var(--border2)"),
-                            background:hasEmp?"rgba(22,163,74,.06)":"var(--bg2)",
-                            color:hasEmp?"var(--green)":"var(--muted)",
+                            border:"1px solid "+(ec?ec.border:"var(--border2)"),
+                            background:ec?ec.bg:"var(--bg2)",
+                            color:ec?ec.text:"var(--muted)",
                             opacity:isSubmitted?.7:1}}
                         >
                           <option value="">-- Off --</option>
@@ -945,8 +962,8 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                               {TIME_OPTIONS.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
                             </select>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                              <span style={{fontSize:9,color:"var(--muted)",fontFamily:"var(--mono)"}}>{hrs}h</span>
-                              {emp && <span style={{fontSize:8,color:"var(--muted2)",fontWeight:500}}>{emp.name.split(" ")[0]}</span>}
+                              <span style={{fontSize:9,color:ec?ec.text:"var(--muted)",fontFamily:"var(--mono)",fontWeight:600}}>{hrs}h</span>
+                              {emp && <span style={{fontSize:8,color:ec?ec.text:"var(--muted2)",fontWeight:500}}>{emp.name.split(" ")[0]}</span>}
                             </div>
                           </>
                         )}
@@ -1061,10 +1078,12 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
 
             {/* Employee Pay Cards */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}}>
-              {payData.map(({ emp, hrs, days, gross }) => (
-                <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:"4px solid rgba(59,130,246,.5)"}}>
+              {payData.map(({ emp, hrs, days, gross }) => {
+                const ec = getEmpColor(emp.id);
+                return (
+                <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:"4px solid "+(ec?ec.border:"rgba(59,130,246,.5)")}}>
                   <div style={{padding:"14px 16px"}}>
-                    <div style={{fontSize:16,fontWeight:700,color:"#3b82f6",marginBottom:8}}>{emp.name}</div>
+                    <div style={{fontSize:16,fontWeight:700,color:ec?ec.text:"#3b82f6",marginBottom:8}}>{emp.name}</div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:16,fontSize:13}}>
                       <div>Hours: <strong>{hrs}</strong></div>
                       <div>Days: <strong>{days}</strong></div>
@@ -1075,7 +1094,8 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                     <div><span style={{fontSize:13}}>Gross Pay: </span><strong style={{fontSize:16,color:"var(--green)"}}>${gross.toFixed(2)}</strong></div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Totals Bar */}
