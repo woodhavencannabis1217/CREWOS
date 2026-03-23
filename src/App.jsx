@@ -729,6 +729,8 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const isSubmitted = !!submittedWeeks[weekStart];
   const submittedAt = submittedWeeks[weekStart] || null;
 
+  const [showSchedTaxBreakdown, setShowSchedTaxBreakdown] = useState({});
+
   // Payroll history — snapshot saved each time a schedule is submitted
   const [payrollHistory, setPayrollHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crewos_payroll_history")) || []; } catch { return []; }
@@ -1100,39 +1102,109 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
           const hrs = empHoursMap[emp.id] || 0;
           const days = empDaysMap[emp.id] ? empDaysMap[emp.id].size : 0;
           const gross = hrs * (emp.rate || 0);
-          return { emp, hrs, days, gross };
+          const filing = emp.filingStatus || "Single/MFS";
+          // Tax calculation (same as Payroll tab)
+          const calcSchedTaxes = (g, f) => {
+            const annual = g * 52;
+            let fedTax = 0;
+            if (f === "HoH") {
+              if (annual <= 16550) fedTax = annual * 0.10;
+              else if (annual <= 63100) fedTax = 1655 + (annual - 16550) * 0.12;
+              else if (annual <= 100500) fedTax = 7240.60 + (annual - 63100) * 0.22;
+              else if (annual <= 191950) fedTax = 15468.60 + (annual - 100500) * 0.24;
+              else fedTax = 37416.60 + (annual - 191950) * 0.32;
+            } else if (f === "MFJ") {
+              if (annual <= 23200) fedTax = annual * 0.10;
+              else if (annual <= 94300) fedTax = 2320 + (annual - 23200) * 0.12;
+              else if (annual <= 201050) fedTax = 10852 + (annual - 94300) * 0.22;
+              else fedTax = 34337 + (annual - 201050) * 0.24;
+            } else {
+              if (annual <= 11600) fedTax = annual * 0.10;
+              else if (annual <= 47150) fedTax = 1160 + (annual - 11600) * 0.12;
+              else if (annual <= 100525) fedTax = 5426 + (annual - 47150) * 0.22;
+              else if (annual <= 191950) fedTax = 17168.50 + (annual - 100525) * 0.24;
+              else fedTax = 39110.50 + (annual - 191950) * 0.32;
+            }
+            fedTax = fedTax / 52;
+            let nyTax = 0;
+            if (annual <= 8500) nyTax = annual * 0.04;
+            else if (annual <= 11700) nyTax = 340 + (annual - 8500) * 0.045;
+            else if (annual <= 13900) nyTax = 484 + (annual - 11700) * 0.0525;
+            else if (annual <= 80650) nyTax = 600 + (annual - 13900) * 0.0585;
+            else if (annual <= 215400) nyTax = 4504.89 + (annual - 80650) * 0.0625;
+            else nyTax = 12921.78 + (annual - 215400) * 0.0685;
+            nyTax = nyTax / 52;
+            const ss = g * 0.062;
+            const medicare = g * 0.0145;
+            const nySdi = Math.min(g * 0.005, 0.60 * 7 / 52);
+            const nyPfl = g * 0.00455;
+            const empTaxes = fedTax + nyTax + ss + medicare + nySdi + nyPfl;
+            const employerSs = g * 0.062;
+            const employerMedicare = g * 0.0145;
+            const employerTaxes = employerSs + employerMedicare;
+            return { fedTax, nyTax, ss, medicare, nySdi, nyPfl, empTaxes, employerSs, employerMedicare, employerTaxes, net: g - empTaxes, totalCost: g + employerTaxes };
+          };
+          const taxes = calcSchedTaxes(gross, filing === "Single/MFS" ? "S" : filing === "HoH" ? "HoH" : "MFJ");
+          return { emp, hrs, days, gross, filing, taxes };
         });
 
         const totHrs = payData.reduce((s, d) => s + d.hrs, 0);
         const totGross = payData.reduce((s, d) => s + d.gross, 0);
+        const totEmpTax = payData.reduce((s, d) => s + d.taxes.empTaxes, 0);
+        const totNet = payData.reduce((s, d) => s + d.taxes.net, 0);
+        const totErTax = payData.reduce((s, d) => s + d.taxes.employerTaxes, 0);
+        const totCost = payData.reduce((s, d) => s + d.taxes.totalCost, 0);
 
         return (
           <div style={{marginTop:24}}>
             <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
               <div style={{fontSize:18,fontWeight:700}}>Scheduled Pay Summary</div>
-              <span style={{fontSize:11,padding:"3px 10px",border:"1px solid var(--border)",borderRadius:20,color:"var(--muted2)"}}>Based on Schedule</span>
+              <span style={{fontSize:11,padding:"3px 10px",border:"1px solid var(--border)",borderRadius:20,color:"var(--muted2)"}}>With Tax Estimates</span>
             </div>
 
             <div style={{background:"rgba(59,130,246,.06)",border:"1px solid rgba(59,130,246,.2)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#3b82f6"}}>
               &#x1F4CB; This is the <strong>projected</strong> payroll based on the schedule above. Actual payroll (under the Payroll tab) is based on employee clock-in/clock-out times and may differ.
             </div>
 
+            <div style={{background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.3)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"var(--amber)"}}>
+              &#x26A0; Tax withholding amounts are <strong>estimates</strong> based on 2025 IRS/NYS brackets and weekly pay frequency. Actual payroll taxes through iSolved may differ slightly. Flat-rate taxes (SS, Medicare, SDI, PFL) are exact.
+            </div>
+
             {/* Employee Pay Cards */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14,marginBottom:20}}>
-              {payData.map(({ emp, hrs, days, gross }) => {
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:14,marginBottom:20}}>
+              {payData.map(({ emp, hrs, days, gross, filing, taxes }) => {
                 const ec = getEmpColor(emp.id);
+                const showTax = showSchedTaxBreakdown[emp.id];
                 return (
                 <div key={emp.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:"4px solid "+(ec?ec.border:"rgba(59,130,246,.5)")}}>
                   <div style={{padding:"14px 16px"}}>
-                    <div style={{fontSize:16,fontWeight:700,color:ec?ec.text:"#3b82f6",marginBottom:8}}>{emp.name}</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:16,fontSize:13}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                      <span style={{fontSize:16,fontWeight:700,color:ec?ec.text:"#3b82f6"}}>{emp.name}</span>
+                      <span style={{fontSize:12,color:"var(--muted2)"}}>({filing})</span>
+                    </div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:16,fontSize:13,marginBottom:8}}>
                       <div>Hours: <strong>{hrs}</strong></div>
                       <div>Days: <strong>{days}</strong></div>
                       <div>Rate: <strong>${(emp.rate||0).toFixed(2)}/hr</strong></div>
+                      <div>Gross: <strong style={{color:"var(--text)"}}>${gross.toFixed(2)}</strong></div>
                     </div>
+                    <div style={{cursor:"pointer",fontSize:12,color:"#3b82f6",marginBottom:showTax?8:0}} onClick={() => setShowSchedTaxBreakdown(p => ({...p, [emp.id]:!p[emp.id]}))}>
+                      {showTax ? "\u25B2" : "\u25BC"} {showTax ? "Hide" : "Show"} tax breakdown
+                    </div>
+                    {showTax && (
+                      <div style={{fontSize:12,color:"var(--muted2)",padding:"8px 0",lineHeight:1.8}}>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>Federal Income Tax</span><span style={{fontFamily:"var(--mono)"}}>${taxes.fedTax.toFixed(2)}</span></div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>NY State Income Tax</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nyTax.toFixed(2)}</span></div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>Social Security (6.2%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.ss.toFixed(2)}</span></div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>Medicare (1.45%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.medicare.toFixed(2)}</span></div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>NY SDI</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nySdi.toFixed(2)}</span></div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}><span>NY PFL (0.455%)</span><span style={{fontFamily:"var(--mono)"}}>${taxes.nyPfl.toFixed(2)}</span></div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{borderTop:"1px solid var(--border)",padding:"10px 16px",background:"var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div><span style={{fontSize:13}}>Gross Pay: </span><strong style={{fontSize:16,color:"var(--green)"}}>${gross.toFixed(2)}</strong></div>
+                  <div style={{borderTop:"1px solid var(--border)",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",background:"var(--bg4)"}}>
+                    <div><span style={{fontSize:13}}>Net Pay: </span><strong style={{fontSize:16,color:"var(--green)"}}>${taxes.net.toFixed(2)}</strong></div>
+                    <div><span style={{fontSize:11,color:"var(--red)"}}>Total Cost: ${taxes.totalCost.toFixed(2)}</span></div>
                   </div>
                 </div>
                 );
@@ -1142,9 +1214,11 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
             {/* Totals Bar */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
               {[
-                { label:"Total Scheduled Hours", val: totHrs + "h", bg:"#1e3a5f", color:"#fff" },
-                { label:"Total Employees", val: scheduledEmps.length, bg:"#1e3a5f", color:"#fff" },
-                { label:"Total Projected Payroll", val: "$" + totGross.toFixed(2), bg:"#166534", color:"#fff" },
+                { label:"Total Gross Wages", val:"$"+totGross.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Employee Taxes", val:"$"+totEmpTax.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Net Pay", val:"$"+totNet.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Employer Taxes", val:"$"+totErTax.toFixed(2), bg:"#1e3a5f", color:"#fff" },
+                { label:"Total Payroll Cost", val:"$"+totCost.toFixed(2), bg:"#166534", color:"#fff" },
               ].map((t,i) => (
                 <div key={i} style={{background:t.bg,color:t.color,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
                   <div style={{fontSize:11,opacity:.8,marginBottom:4}}>{t.label}</div>
