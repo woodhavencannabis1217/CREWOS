@@ -3321,7 +3321,7 @@ export default function App() {
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
   const [fbStartTime] = useState(() => Date.now());
-  const fbSyncRef = useRef({ pushing: false, lastPush: 0 });
+  const fbSyncRef = useRef({ pushing: false, lastPush: 0, firstPullDone: false });
 
   // Push all data to Firebase whenever it changes
   const syncDataKeys = [
@@ -3339,6 +3339,8 @@ export default function App() {
   useEffect(() => {
     const fbUrl = settings.firebaseUrl;
     if (!fbUrl) return;
+    // CRITICAL: Don't push until the first pull has completed, otherwise old local data overwrites Firebase
+    if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
       notifications, drawerLogs, shiftNotes,
@@ -3402,7 +3404,11 @@ export default function App() {
         // On first pull, always apply data (to bootstrap new devices)
         // On subsequent pulls, only apply if newer and not from us
         const shouldApply = isFirstPull || (data._lastUpdated > lastPulled && data._updatedBy !== (user?.id || "unknown"));
-        isFirstPull = false;
+        if (isFirstPull) {
+          isFirstPull = false;
+          // Mark first pull done so pushes can start (after a short delay to let state settle)
+          setTimeout(() => { fbSyncRef.current.firstPullDone = true; }, 2000);
+        }
         if (shouldApply) {
           lastPulled = data._lastUpdated;
           // Sync settings (except firebaseUrl which is already set locally)
@@ -3419,6 +3425,10 @@ export default function App() {
           if (data.drawerLogs && JSON.stringify(data.drawerLogs) !== JSON.stringify(drawerLogs)) setDrawerLogs(data.drawerLogs);
           if (data.shiftNotes && JSON.stringify(data.shiftNotes) !== JSON.stringify(shiftNotes)) setShiftNotes(data.shiftNotes);
         }
+      } else if (isFirstPull) {
+        // No data on Firebase yet — allow pushes to start
+        isFirstPull = false;
+        fbSyncRef.current.firstPullDone = true;
       }
 
       // Also poll for vendor deliveries - check both "deliveries" and "pending_delivery" paths
