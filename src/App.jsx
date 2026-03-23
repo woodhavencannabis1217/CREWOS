@@ -1023,6 +1023,63 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         </table>
       </div>
 
+      {/* ═══ VISUAL SCHEDULE CALENDAR ═══ */}
+      {isSubmitted && (() => {
+        const calDays = DAY_FULL.map((dayName, di) => {
+          const dayDate = new Date(new Date(weekStart + "T00:00:00"));
+          dayDate.setDate(dayDate.getDate() + di);
+          const dateLabel = dayDate.toLocaleDateString("en-US", { month:"short", day:"numeric" }).toUpperCase();
+          const blocks = [];
+          shifts.forEach(shift => {
+            const c = getCell(shift.id, di);
+            if (c.empId) {
+              const emp = nonAdmin.find(e => e.id === c.empId);
+              const ec = getEmpColor(c.empId);
+              const hrs = calcShiftHours(c.start, c.end);
+              blocks.push({ emp, ec, start: c.start, end: c.end, hrs });
+            }
+          });
+          return { dayName, dateLabel, blocks };
+        });
+        return (
+          <div className="card" style={{padding:0,overflow:"hidden",marginTop:16,marginBottom:16}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
+              {calDays.map((day, i) => (
+                <div key={i} style={{borderRight:i<6?"1px solid var(--border)":"none",minHeight:140}}>
+                  <div style={{textAlign:"center",padding:"12px 6px 8px",borderBottom:"1px solid var(--border)",background:"var(--bg4)"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{day.dayName}</div>
+                    <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>({day.dateLabel})</div>
+                  </div>
+                  <div style={{padding:"8px 6px"}}>
+                    {day.blocks.length === 0 ? (
+                      <div style={{fontSize:11,color:"var(--muted2)",textAlign:"center",padding:"20px 0",fontStyle:"italic"}}>No shifts</div>
+                    ) : (
+                      day.blocks.map((blk, bi) => (
+                        <div key={bi} style={{
+                          background: blk.ec ? blk.ec.bg : "var(--bg4)",
+                          borderLeft: "3px solid " + (blk.ec ? blk.ec.border : "var(--border)"),
+                          borderRadius: "0 8px 8px 0",
+                          padding: "8px 8px",
+                          marginBottom: 6,
+                        }}>
+                          <div style={{fontSize:12,fontWeight:700,color:blk.ec?blk.ec.text:"var(--text)",marginBottom:4}}>{blk.emp ? blk.emp.name : "?"}</div>
+                          <div style={{fontSize:11,color:"var(--text)",fontWeight:500}}>
+                            {formatTimeLabel(blk.start)} – {formatTimeLabel(blk.end)}
+                          </div>
+                          <div style={{fontSize:11,fontFamily:"var(--mono)",color:blk.ec?blk.ec.text:"var(--muted)",fontWeight:600,marginTop:3}}>
+                            {blk.hrs}h
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Delivery Role Assignment */}
       {(() => {
         const empIds = [...getScheduledEmps()];
