@@ -1039,6 +1039,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
               blocks.push({ emp, ec, start: c.start, end: c.end, hrs });
             }
           });
+          blocks.sort((a, b) => a.start.localeCompare(b.start));
           return { dayName, dateLabel, blocks };
         });
         return (
@@ -2684,6 +2685,15 @@ function EmpSchedule({ employee, schedule }) {
 
   const totalHrs = myShifts.reduce((s, x) => s + x.hours, 0);
 
+  // Build calendar grid data — group shifts by day
+  const calDays = DAY_FULL.map((dayName, di) => {
+    const dayDate = new Date(new Date(weekStart + "T00:00:00"));
+    dayDate.setDate(dayDate.getDate() + di);
+    const dateLabel = dayDate.toLocaleDateString("en-US", { month:"short", day:"numeric" }).toUpperCase();
+    const shift = myShifts.find(s => s.dayIdx === di);
+    return { dayName, dateLabel, shift };
+  });
+
   return (
     <div>
       <div className="week-nav">
@@ -2701,15 +2711,41 @@ function EmpSchedule({ employee, schedule }) {
           Total: <strong style={{color:"var(--green)"}}>{totalHrs}h</strong> this week &middot; {myShifts.length} shift{myShifts.length>1?"s":""}
         </div>
       )}
-      {myShifts.length===0 ? <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>{isPublished ? "You have no shifts scheduled this week." : "Schedule not yet published."}</div>
-        : myShifts.map((s,i) => (
-          <div className="my-shift-card" key={i}>
-            <div className="shift-day">{s.day} &middot; {s.date}</div>
-            <div className="shift-time-big">{formatTimeLabel(s.start)} &ndash; {formatTimeLabel(s.end)}</div>
-            <div className="shift-hours">{s.hours} hours</div>
+      {myShifts.length===0 ? (
+        <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>{isPublished ? "You have no shifts scheduled this week." : "Schedule not yet published."}</div>
+      ) : (
+        <div className="card" style={{padding:0,overflow:"hidden"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
+            {calDays.map((day, i) => (
+              <div key={i} style={{borderRight:i<6?"1px solid var(--border)":"none",minHeight:140}}>
+                <div style={{textAlign:"center",padding:"12px 6px 8px",borderBottom:"1px solid var(--border)",background:"var(--bg4)"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{day.dayName}</div>
+                  <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>({day.dateLabel})</div>
+                </div>
+                <div style={{padding:"8px 6px"}}>
+                  {!day.shift ? (
+                    <div style={{fontSize:11,color:"var(--muted2)",textAlign:"center",padding:"20px 0",fontStyle:"italic"}}>Off</div>
+                  ) : (
+                    <div style={{
+                      background:"rgba(22,163,74,.10)",
+                      borderLeft:"3px solid rgba(22,163,74,.6)",
+                      borderRadius:"0 8px 8px 0",
+                      padding:"8px 8px",
+                    }}>
+                      <div style={{fontSize:11,color:"var(--text)",fontWeight:500}}>
+                        {formatTimeLabel(day.shift.start)} – {formatTimeLabel(day.shift.end)}
+                      </div>
+                      <div style={{fontSize:11,fontFamily:"var(--mono)",color:"var(--green)",fontWeight:600,marginTop:3}}>
+                        {day.shift.hours}h
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
-        ))
-      }
+        </div>
+      )}
     </div>
   );
 }
