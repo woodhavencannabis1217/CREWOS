@@ -318,6 +318,47 @@ input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
   .stat-grid{grid-template-columns:1fr 1fr}
   .user-info{display:none}
 }
+
+/* ANNOUNCEMENTS PANEL */
+.ann-panel{background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 20px;max-height:320px;overflow-y:auto}
+.ann-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.ann-panel-title{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted2)}
+.ann-new-btn{background:var(--green);color:#fff;border:none;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.ann-new-btn:hover{background:var(--green2)}
+.ann-empty{font-size:12px;color:var(--muted);text-align:center;padding:6px 0}
+.ann-form{background:var(--bg4);border-radius:8px;padding:10px;margin-bottom:8px;display:flex;flex-direction:column;gap:8px}
+.ann-form textarea,.ann-form input,.ann-form select{padding:8px 10px;border:1px solid var(--border2);border-radius:6px;font-size:13px;font-family:var(--font);background:var(--bg2);color:var(--text);outline:none;resize:none}
+.ann-form textarea:focus,.ann-form input:focus,.ann-form select:focus{border-color:var(--green)}
+.ann-form-row{display:flex;gap:8px;align-items:center}
+.ann-post-btn{background:var(--green);color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.ann-cancel-btn{background:var(--bg5);color:var(--muted3);border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--font)}
+.ann-item{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px}
+.ann-item.pending{border-color:var(--amber)}
+.ann-item.active{border-color:var(--green)}
+.ann-item.done{opacity:.55;border-color:var(--border)}
+.ann-item-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.ann-item-msg{font-size:13px;font-weight:500;line-height:1.4;flex:1}
+.ann-del{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:0 2px}
+.ann-del:hover{color:var(--red)}
+.ann-item-meta{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;align-items:center}
+.ann-tag{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:600}
+.ann-tag.from{background:#e8f5ec;color:var(--green)}
+.ann-tag.assign{background:#fff3e0;color:var(--amber)}
+.ann-tag.time{background:#e3f2fd;color:var(--blue)}
+.ann-tag.accepted{background:#e8f5ec;color:var(--green)}
+.ann-tag.completed{background:var(--bg5);color:var(--muted2)}
+.ann-ago{font-size:10px;color:var(--muted);margin-left:2px}
+.ann-accept-btn{margin-top:8px;background:var(--amber);color:#fff;border:none;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font)}
+.ann-accept-btn:hover{opacity:.9}
+.ann-waiting{margin-top:6px;font-size:11px;color:var(--muted)}
+.ann-countdown-area{margin-top:8px}
+.ann-countdown-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.ann-countdown-num{font-size:18px;font-weight:700;font-family:var(--mono);color:var(--green)}
+.ann-countdown-num.urgent{color:var(--red)}
+.ann-countdown-bar{flex:1;height:5px;background:var(--bg5);border-radius:3px;overflow:hidden}
+.ann-countdown-fill{height:100%;background:var(--green);border-radius:3px;transition:width 1s linear}
+.ann-countdown-fill.urgent{background:var(--red)}
+.ann-complete-btn{background:var(--green);color:#fff;border:none;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font)}
 `;
 
 // ─── TOAST SYSTEM ────────────────────────────────────────────────────────────
@@ -2633,6 +2674,7 @@ function AdminSettings({ settings, setSettings }) {
               if (data.overrides) setOverrides(data.overrides);
               if (data.drawerLogs) setDrawerLogs(data.drawerLogs);
               if (data.shiftNotes) setShiftNotes(data.shiftNotes);
+              if (data.announcements) setAnnouncements(data.announcements);
               toast.show("Data pulled from cloud!");
             } else { toast.show("No data found in cloud", "error"); }
           }}>Pull Data from Cloud</button>}
@@ -3321,6 +3363,132 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
 }
 
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
+// ─── ANNOUNCEMENTS PANEL (always visible) ─────────────────────────────────
+function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, toast }) {
+  const [showForm, setShowForm] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [assignTo, setAssignTo] = useState("");
+  const [duration, setDuration] = useState("");
+  const [, setTick] = useState(0);
+
+  // Tick every second for countdown timers
+  useEffect(() => {
+    const hasActive = announcements.some(a => a.accepted && !a.completed && a.durationMinutes);
+    if (!hasActive) return;
+    const iv = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, [announcements]);
+
+  const now = Date.now();
+  const visible = announcements.filter(a => {
+    if (!a.completed) return true;
+    return (now - new Date(a.completedAt).getTime()) < 3600000;
+  });
+
+  const postAnn = () => {
+    if (!msg.trim()) { toast.show("Enter a message"); return; }
+    const ann = {
+      id: uid(), author: user.name, message: msg.trim(),
+      assignedTo: assignTo || null, durationMinutes: duration ? Number(duration) : null,
+      createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
+      completed: false, completedAt: null,
+    };
+    setAnnouncements(prev => [ann, ...prev]);
+    setMsg(""); setAssignTo(""); setDuration(""); setShowForm(false);
+    toast.show("Announcement posted!");
+  };
+
+  const acceptAnn = (id) => {
+    setAnnouncements(prev => prev.map(a => a.id === id ? { ...a, accepted: true, acceptedAt: new Date().toISOString() } : a));
+    toast.show("Task accepted! Timer started.");
+  };
+
+  const completeAnn = (id) => {
+    setAnnouncements(prev => prev.map(a => a.id === id ? { ...a, completed: true, completedAt: new Date().toISOString() } : a));
+    toast.show("Task completed!");
+  };
+
+  const deleteAnn = (id) => {
+    setAnnouncements(prev => prev.filter(a => a.id !== id));
+  };
+
+  const getRemaining = (a) => {
+    if (!a.accepted || !a.acceptedAt || !a.durationMinutes) return 0;
+    const elapsed = (Date.now() - new Date(a.acceptedAt).getTime()) / 1000;
+    return Math.max(0, Math.floor(a.durationMinutes * 60 - elapsed));
+  };
+
+  const fmtTime = (sec) => { const m = Math.floor(sec / 60), s = sec % 60; return m + ":" + String(s).padStart(2, "0"); };
+  const timeAgo = (iso) => { const d = (Date.now() - new Date(iso).getTime()) / 1000; if (d < 60) return "just now"; if (d < 3600) return Math.floor(d/60) + "m ago"; if (d < 86400) return Math.floor(d/3600) + "h ago"; return Math.floor(d/86400) + "d ago"; };
+
+  const staffList = employees.filter(e => e.role !== "admin");
+
+  return (
+    <div className="ann-panel">
+      <div className="ann-panel-header">
+        <span className="ann-panel-title">Announcements & Tasks</span>
+        <button className="ann-new-btn" onClick={() => setShowForm(!showForm)}>+ New</button>
+      </div>
+      {showForm && (
+        <div className="ann-form">
+          <textarea placeholder="e.g. Clean the window today" value={msg} onChange={e => setMsg(e.target.value)} rows={2} />
+          <div className="ann-form-row">
+            <select value={assignTo} onChange={e => setAssignTo(e.target.value)}>
+              <option value="">Assign to (optional)</option>
+              {staffList.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+            </select>
+            <input type="number" placeholder="Minutes" min="1" max="480" value={duration} onChange={e => setDuration(e.target.value)} style={{width:90}} />
+          </div>
+          <div className="ann-form-row">
+            <button className="ann-post-btn" onClick={postAnn}>Post</button>
+            <button className="ann-cancel-btn" onClick={() => setShowForm(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {visible.length === 0 && !showForm && <div className="ann-empty">No announcements</div>}
+      {visible.map(a => {
+        const isMyAnn = a.author === user.name;
+        const isAssignedToMe = a.assignedTo && a.assignedTo === user.name;
+        const isTask = !!a.durationMinutes;
+        const remaining = isTask && a.accepted ? getRemaining(a) : 0;
+        const urgent = remaining > 0 && remaining < 120;
+        const pct = isTask && a.accepted ? Math.max(0, (remaining / (a.durationMinutes * 60)) * 100) : 0;
+
+        return (
+          <div key={a.id} className={"ann-item" + (a.completed ? " done" : "") + (a.accepted && isTask && !a.completed ? " active" : "") + (isTask && !a.accepted && !a.completed ? " pending" : "")}>
+            <div className="ann-item-top">
+              <div className="ann-item-msg">{a.message}</div>
+              {isMyAnn && !a.completed && <button className="ann-del" onClick={() => deleteAnn(a.id)}>&times;</button>}
+            </div>
+            <div className="ann-item-meta">
+              <span className="ann-tag from">{a.author}</span>
+              {a.assignedTo && <span className="ann-tag assign">{a.assignedTo}</span>}
+              {a.durationMinutes && <span className="ann-tag time">{a.durationMinutes}m</span>}
+              {a.completed && <span className="ann-tag completed">Done</span>}
+              {a.accepted && !a.completed && <span className="ann-tag accepted">Accepted</span>}
+              <span className="ann-ago">{timeAgo(a.createdAt)}</span>
+            </div>
+            {isTask && !a.completed && !a.accepted && (
+              (!a.assignedTo || isAssignedToMe) ?
+                <button className="ann-accept-btn" onClick={() => acceptAnn(a.id)}>Accept Task</button> :
+                <div className="ann-waiting">Waiting for {a.assignedTo}</div>
+            )}
+            {isTask && a.accepted && !a.completed && (
+              <div className="ann-countdown-area">
+                <div className="ann-countdown-row">
+                  <span className={"ann-countdown-num" + (urgent ? " urgent" : "")}>{remaining > 0 ? fmtTime(remaining) : "0:00"}</span>
+                  <div className="ann-countdown-bar"><div className={"ann-countdown-fill" + (urgent ? " urgent" : "")} style={{width: pct + "%"}} /></div>
+                </div>
+                {(isAssignedToMe || isMyAnn || !a.assignedTo) && <button className="ann-complete-btn" onClick={() => completeAnn(a.id)}>Mark Complete</button>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   // Hash routing: if #/vendor-form, show the vendor form page
   const [hash, setHash] = useState(window.location.hash);
@@ -3399,6 +3567,7 @@ export default function App() {
   });
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
+  const [announcements, setAnnouncements] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_announcements"))||[]; } catch { return []; } });
 
   // Persist
   useEffect(() => { localStorage.setItem("crewos_employees", JSON.stringify(employees)); }, [employees]);
@@ -3410,6 +3579,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_settings", JSON.stringify(settings)); }, [settings]);
   useEffect(() => { localStorage.setItem("crewos_drawer", JSON.stringify(drawerLogs)); }, [drawerLogs]);
   useEffect(() => { localStorage.setItem("crewos_shiftnotes", JSON.stringify(shiftNotes)); }, [shiftNotes]);
+  useEffect(() => { localStorage.setItem("crewos_announcements", JSON.stringify(announcements)); }, [announcements]);
 
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
@@ -3427,6 +3597,7 @@ export default function App() {
     ["settings_data", { ...settings, firebaseUrl: undefined }],
     ["drawerLogs", drawerLogs],
     ["shiftNotes", shiftNotes],
+    ["announcements", announcements],
   ];
 
   useEffect(() => {
@@ -3436,7 +3607,7 @@ export default function App() {
     if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
-      notifications, drawerLogs, shiftNotes,
+      notifications, drawerLogs, shiftNotes, announcements,
       settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
@@ -3481,7 +3652,7 @@ export default function App() {
         firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
       }
     });
-  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, settings]);
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings]);
 
   // Pull data from Firebase on load + poll for changes
   useEffect(() => {
@@ -3517,6 +3688,7 @@ export default function App() {
           if (data.notifications && JSON.stringify(data.notifications) !== JSON.stringify(notifications)) setNotifications(data.notifications);
           if (data.drawerLogs && JSON.stringify(data.drawerLogs) !== JSON.stringify(drawerLogs)) setDrawerLogs(data.drawerLogs);
           if (data.shiftNotes && JSON.stringify(data.shiftNotes) !== JSON.stringify(shiftNotes)) setShiftNotes(data.shiftNotes);
+          if (data.announcements && JSON.stringify(data.announcements) !== JSON.stringify(announcements)) setAnnouncements(data.announcements);
         }
       } else if (isFirstPull) {
         // No data on Firebase yet — allow pushes to start
@@ -3846,6 +4018,8 @@ export default function App() {
             </div>
           ))}
         </div>
+
+        <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} />
 
         <div className="body">
           {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
