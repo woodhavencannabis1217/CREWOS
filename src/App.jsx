@@ -3383,7 +3383,7 @@ export default function App() {
   });
   const [settings, setSettings] = useState(() => {
     try {
-      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" };
+      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" };
       const saved = JSON.parse(localStorage.getItem("crewos_settings")) || defaults;
       // Allow Firebase URL to be set via URL parameter for easy setup on new devices
       try {
@@ -3395,7 +3395,7 @@ export default function App() {
         }
       } catch {}
       return saved;
-    } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"" }; }
+    } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" }; }
   });
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
