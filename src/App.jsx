@@ -267,6 +267,39 @@ input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
 .iv-reset{background:none;border:1px solid var(--border);color:var(--muted2);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-family:var(--font)}
 .iv-reset:hover{border-color:var(--red);color:var(--red)}
 
+/* NFC CLOCK PAGE */
+.nfc-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);padding:20px}
+.nfc-box{width:340px;text-align:center}
+.nfc-logo{font-size:28px;font-weight:700;margin-bottom:2px}
+.nfc-logo span{color:var(--green)}
+.nfc-logo em{color:var(--muted2);font-style:normal;font-weight:400;font-size:16px}
+.nfc-subtitle{font-size:13px;color:var(--muted2);margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px}
+.nfc-badge{display:inline-block;background:rgba(8,145,178,.08);color:var(--cyan);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.06em;text-transform:uppercase}
+.nfc-welcome{font-size:22px;font-weight:700;margin-bottom:4px;letter-spacing:-.02em}
+.nfc-status-text{font-size:13px;color:var(--muted2);margin-bottom:24px}
+.nfc-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.nfc-clock-btn{padding:24px 16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;border:none;font-family:var(--font);transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:6px}
+.nfc-clock-btn:active{transform:scale(.96)}
+.nfc-clock-btn:disabled{opacity:.25;cursor:not-allowed;transform:none}
+.nfc-clock-btn.in{background:var(--green);color:#fff;box-shadow:0 4px 16px rgba(22,163,74,.25)}
+.nfc-clock-btn.in:hover:not(:disabled){background:var(--green2)}
+.nfc-clock-btn.out{background:rgba(220,38,38,.06);color:var(--red);border:2px solid rgba(220,38,38,.2)}
+.nfc-clock-btn.out:hover:not(:disabled){background:rgba(220,38,38,.12)}
+.nfc-clock-icon{font-size:28px}
+.nfc-done-wrap{padding:20px 0}
+.nfc-done-check{width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px;animation:nfcPop .4s ease}
+.nfc-done-check.in{background:rgba(22,163,74,.1);color:var(--green)}
+.nfc-done-check.out{background:rgba(220,38,38,.08);color:var(--red)}
+.nfc-done-msg{font-size:20px;font-weight:700;margin-bottom:6px}
+.nfc-done-time{font-size:14px;color:var(--muted2);font-family:var(--mono);margin-bottom:20px}
+.nfc-done-close{font-size:12px;color:var(--muted)}
+@keyframes nfcPop{0%{transform:scale(0)}50%{transform:scale(1.15)}100%{transform:scale(1)}}
+.nfc-error{background:rgba(220,38,38,.04);border:1px solid rgba(220,38,38,.15);border-radius:10px;padding:14px;color:var(--red);font-size:13px;margin-top:16px}
+.nfc-loading{display:flex;flex-direction:column;align-items:center;gap:12px;padding:40px 0}
+.nfc-spinner{width:32px;height:32px;border:3px solid var(--bg5);border-top-color:var(--green);border-radius:50%;animation:nfcSpin .6s linear infinite}
+@keyframes nfcSpin{to{transform:rotate(360deg)}}
+.nfc-source{display:inline-block;background:rgba(8,145,178,.08);color:var(--cyan);font-size:9px;font-weight:700;padding:1px 6px;border-radius:4px;letter-spacing:.04em;margin-left:4px;vertical-align:middle}
+
 /* ALERTS */
 .notif{background:var(--bg2);border-radius:14px;padding:16px;border-left:3px solid;margin-bottom:10px;transition:all .15s;box-shadow:0 1px 3px rgba(0,0,0,.03)}
 .notif:hover{box-shadow:0 2px 8px rgba(0,0,0,.06)}
@@ -2229,6 +2262,183 @@ const DEFAULT_VENDOR_FIELDS = [
   { id:3, name:"Driver signature", type:"Required - Signature" },
 ];
 
+// ─── NFC CLOCK PAGE (standalone page employees see after tapping NFC tag) ────
+function NfcClockPage() {
+  const hashParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
+  const fbUrl = decodeURIComponent(hashParams.get("fb") || "");
+  const locId = hashParams.get("loc") || "";
+
+  const [phase, setPhase] = useState("pin"); // pin | loading | action | processing | done | error
+  const [pin, setPin] = useState([]);
+  const [pinError, setPinError] = useState("");
+  const [shake, setShake] = useState(false);
+  const [employee, setEmployee] = useState(null);
+  const [isClockedIn, setIsClockedIn] = useState(false);
+  const [clockType, setClockType] = useState(null); // "in" or "out" for done screen
+  const [clockTime, setClockTime] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [employees, setEmployees] = useState([]);
+
+  // Validate params
+  useEffect(() => {
+    if (!fbUrl) { setPhase("error"); setErrorMsg("Invalid NFC tag — no sync URL found. Please contact your admin."); }
+  }, []);
+
+  const addPin = (d) => {
+    if (pin.length >= 4) return;
+    const next = [...pin, d];
+    setPin(next);
+    setPinError("");
+    if (next.length === 4) {
+      setTimeout(async () => {
+        const code = next.join("");
+        setPhase("loading");
+        try {
+          const data = await firebaseGet(fbUrl, "crewos_data");
+          if (!data || !data.employees) { setPhase("error"); setErrorMsg("Could not connect to server. Please try again."); return; }
+          const emps = data.employees;
+          setEmployees(emps);
+          const emp = emps.find(e => e.pin === code);
+          if (!emp) {
+            setPhase("pin"); setPinError("Incorrect PIN"); setShake(true);
+            setTimeout(() => { setShake(false); setPin([]); }, 500);
+            return;
+          }
+          setEmployee(emp);
+          // Determine if currently clocked in
+          const logs = data.clockLogs || [];
+          const myLogs = logs.filter(l => l.employeeId === emp.id);
+          const lastLog = myLogs[myLogs.length - 1];
+          setIsClockedIn(lastLog && lastLog.type === "in");
+          setPhase("action");
+        } catch (err) {
+          setPhase("error"); setErrorMsg("Connection failed: " + err.message);
+        }
+      }, 200);
+    }
+  };
+
+  const doClock = async (type) => {
+    setPhase("processing");
+    try {
+      const data = await firebaseGet(fbUrl, "crewos_data");
+      const logs = data?.clockLogs || [];
+      const now = new Date();
+      const newLog = {
+        employeeId: employee.id,
+        type,
+        time: now.toISOString(),
+        source: "nfc",
+        locationId: locId,
+      };
+      logs.push(newLog);
+      await firebaseSet(fbUrl, "crewos_data/clockLogs", logs);
+      setClockType(type);
+      setClockTime(now);
+      setPhase("done");
+    } catch (err) {
+      setPhase("error"); setErrorMsg("Failed to record clock event: " + err.message);
+    }
+  };
+
+  if (phase === "error") {
+    return (
+      <div className="nfc-wrap">
+        <div className="nfc-box">
+          <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
+          <div className="nfc-error">{errorMsg}</div>
+          <button className="btn" style={{marginTop:16,width:"100%"}} onClick={() => { setPhase("pin"); setPin([]); setErrorMsg(""); }}>Try Again</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "loading" || phase === "processing") {
+    return (
+      <div className="nfc-wrap">
+        <div className="nfc-box">
+          <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
+          <div className="nfc-loading">
+            <div className="nfc-spinner" />
+            <div style={{fontSize:13,color:"var(--muted2)"}}>{phase === "loading" ? "Verifying PIN..." : "Recording clock event..."}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "done") {
+    return (
+      <div className="nfc-wrap">
+        <div className="nfc-box">
+          <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
+          <div className="nfc-done-wrap">
+            <div className={"nfc-done-check " + clockType}>{clockType === "in" ? "✓" : "⏹"}</div>
+            <div className="nfc-done-msg">Clocked {clockType === "in" ? "In" : "Out"}!</div>
+            <div style={{fontSize:14,fontWeight:500,marginBottom:4}}>{employee?.name}</div>
+            <div className="nfc-done-time">
+              {clockTime?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </div>
+            <div className="nfc-done-close">You can close this page now</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "action") {
+    return (
+      <div className="nfc-wrap">
+        <div className="nfc-box">
+          <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
+          <div className="nfc-subtitle"><span className="nfc-badge">NFC Clock</span></div>
+          <div className="nfc-welcome">Hey, {employee?.name}!</div>
+          <div className="nfc-status-text">
+            {isClockedIn ? "You are currently clocked in" : "You are not clocked in"}
+          </div>
+          <div className="nfc-actions">
+            <button className="nfc-clock-btn in" disabled={isClockedIn} onClick={() => doClock("in")}>
+              <span className="nfc-clock-icon">▶</span>
+              Clock In
+            </button>
+            <button className="nfc-clock-btn out" disabled={!isClockedIn} onClick={() => doClock("out")}>
+              <span className="nfc-clock-icon">⏹</span>
+              Clock Out
+            </button>
+          </div>
+          <button className="btn ghost" style={{width:"100%"}} onClick={() => { setPhase("pin"); setPin([]); setEmployee(null); }}>Switch Employee</button>
+        </div>
+      </div>
+    );
+  }
+
+  // PIN entry phase
+  return (
+    <div className="nfc-wrap">
+      <div className="nfc-box">
+        <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
+        <div className="nfc-subtitle"><span className="nfc-badge">NFC Clock</span></div>
+        <div style={{fontSize:13,color:"var(--muted2)",marginBottom:24}}>Enter your 4-digit PIN</div>
+        <div className="pin-dots" style={shake ? {animation:"shake .3s"} : {}}>
+          {[0,1,2,3].map(i => (
+            <div key={i} className={"pin-dot" + (pin.length > i ? (pinError ? " err" : " on") : "")} />
+          ))}
+        </div>
+        <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
+        <div className="pin-grid">
+          {[1,2,3,4,5,6,7,8,9].map(n => (
+            <div key={n} className="pkey" onClick={() => addPin(n)}>{n}</div>
+          ))}
+          <div className="pkey del" onClick={() => { setPin([]); setPinError(""); }}>CLR</div>
+          <div className="pkey" onClick={() => addPin(0)}>0</div>
+          <div className="pkey del" style={{visibility:"hidden"}} />
+        </div>
+        <div className="pin-error">{pinError}</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── VENDOR FORM (standalone page vendors see after scanning QR) ─────────────
 function VendorFormPage() {
   // Read Firebase URL from hash params (e.g., #/vendor-form?fb=<encoded-url>)
@@ -3022,6 +3232,50 @@ function AdminSettings({ settings, setSettings }) {
         </div>
       </div>
 
+      <div className="sec-head">NFC Clock-In</div>
+      <div className="card">
+        <div className="setting-row">
+          <div><div className="setting-label">Enable NFC clock-in</div><div className="setting-sub">Let employees clock in/out by tapping an NFC tag at the store</div></div>
+          <div className={"toggle"+(settings.nfcEnabled?" on":"")} onClick={() => {
+            const next = !settings.nfcEnabled;
+            const updates = { nfcEnabled: next };
+            if (next && !settings.nfcLocationId) updates.nfcLocationId = uid();
+            setSettings(s => ({ ...s, ...updates }));
+          }}><div className="toggle-knob" /></div>
+        </div>
+        {settings.nfcEnabled && <>
+          {!settings.firebaseUrl && (
+            <div style={{fontSize:12,color:"var(--amber)",background:"rgba(217,119,6,.04)",padding:"10px 14px",borderRadius:8,border:"1px solid rgba(217,119,6,.15)",marginTop:8}}>
+              <strong>Firebase required:</strong> NFC clock-in needs Cloud Sync enabled. Set up your Firebase URL below first.
+            </div>
+          )}
+          {settings.firebaseUrl && (() => {
+            const nfcUrl = window.location.origin + window.location.pathname + "#/nfc-clock?fb=" + encodeURIComponent(settings.firebaseUrl) + "&loc=" + (settings.nfcLocationId || "");
+            return (
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:12,fontWeight:600,marginBottom:8,color:"var(--muted3)"}}>NFC Tag URL</div>
+                <div style={{fontSize:11,color:"var(--muted)",wordBreak:"break-all",background:"var(--bg4)",padding:"10px 14px",borderRadius:8,fontFamily:"var(--mono)",userSelect:"all",cursor:"text",marginBottom:10,lineHeight:1.6}}>{nfcUrl}</div>
+                <div style={{display:"flex",gap:8,marginBottom:12}}>
+                  <button className="btn small primary" onClick={() => { navigator.clipboard.writeText(nfcUrl); }}>Copy URL</button>
+                  <button className="btn small" onClick={() => window.open(nfcUrl, "_blank")}>Test It</button>
+                </div>
+                <div style={{background:"#fff",padding:16,borderRadius:12,display:"inline-block",border:"1px solid var(--border)",marginBottom:12}}>
+                  <QRCodeSVG value={nfcUrl} size={140} level="M" />
+                </div>
+                <div style={{fontSize:11,color:"var(--muted2)",lineHeight:1.7}}>
+                  <strong>Setup instructions:</strong><br/>
+                  1. Buy NTAG215 NFC stickers (Amazon, ~$10 for 50)<br/>
+                  2. Download "NFC Tools" app on your iPhone<br/>
+                  3. Write this URL to the NFC tag using the app<br/>
+                  4. Stick the tag at your store entrance<br/>
+                  5. Employees tap their iPhone on the tag → enter PIN → clocked in!
+                </div>
+              </div>
+            );
+          })()}
+        </>}
+      </div>
+
       <div className="sec-head">Clock-In Rules</div>
       <div className="card">
         <div className="setting-row">
@@ -3219,6 +3473,7 @@ function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, on
           <span className={"log-type log-"+l.type}>{l.type==="in"?"IN":"OUT"}</span>
           <span style={{color:"var(--muted3)",fontFamily:"var(--mono)",fontSize:13}}>{new Date(l.time).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
           <span style={{color:"var(--muted2)",fontSize:11}}>{new Date(l.time).toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"})}</span>
+          {l.source === "nfc" && <span className="nfc-source">NFC</span>}
         </div>
       ))}
     </div>
@@ -4205,7 +4460,8 @@ export default function App() {
   const [geoBlockMsg, setGeoBlockMsg] = useState("");
   const [geoChecking, setGeoChecking] = useState(false);
 
-  // Hash routing: if #/vendor-form, show the vendor form page (must be after all hooks)
+  // Hash routing: standalone pages (must be after all hooks)
+  if (hash.startsWith("#/nfc-clock")) return <><style>{CSS}</style><NfcClockPage /></>;
   if (hash.startsWith("#/vendor-form")) return <VendorFormPage />;
 
   // Helper: find employee's scheduled start/end for today
