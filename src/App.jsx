@@ -225,6 +225,48 @@ input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
 .form-item-type{font-size:10px;color:var(--muted2)}
 .vendor-entry{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:8px}
 
+/* INVOICE VERIFIER */
+.iv-wrap{margin-top:24px;border-top:1px solid var(--border);padding-top:20px}
+.iv-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.iv-title{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.iv-drop-zone{border:2px dashed var(--border2);border-radius:12px;padding:28px 20px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg3);position:relative;min-height:80px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.iv-drop-zone:hover,.iv-drop-zone.dragover{border-color:var(--green);background:rgba(22,163,74,.04)}
+.iv-drop-zone.has-file{border-color:var(--green);border-style:solid;background:rgba(22,163,74,.04)}
+.iv-drop-icon{font-size:28px;opacity:.6}
+.iv-drop-label{font-size:13px;font-weight:500;color:var(--muted2)}
+.iv-drop-file{font-size:12px;font-weight:600;color:var(--green)}
+.iv-uploads{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+@media(max-width:600px){.iv-uploads{grid-template-columns:1fr}}
+.iv-btn{background:var(--green);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all .15s;width:100%}
+.iv-btn:hover{background:var(--green2)}
+.iv-btn:disabled{opacity:.4;cursor:not-allowed}
+.iv-progress{font-size:12px;color:var(--muted2);text-align:center;padding:12px 0}
+.iv-results{margin-top:16px}
+.iv-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+@media(max-width:600px){.iv-summary{grid-template-columns:1fr 1fr}}
+.iv-stat{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center}
+.iv-stat-num{font-size:22px;font-weight:700;font-family:var(--mono)}
+.iv-stat-label{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em;margin-top:2px}
+.iv-stat.ok .iv-stat-num{color:var(--green)}
+.iv-stat.warn .iv-stat-num{color:var(--amber)}
+.iv-stat.err .iv-stat-num{color:var(--red)}
+.iv-table{width:100%;border-collapse:collapse;font-size:12px}
+.iv-table th{text-align:left;padding:8px 10px;background:var(--bg4);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted2);font-weight:600;border-bottom:1px solid var(--border);position:sticky;top:0}
+.iv-table td{padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.iv-table tr:hover td{background:var(--bg3)}
+.iv-table tr.match td{color:var(--text)}
+.iv-table tr.cheaper td{background:rgba(22,163,74,.04)}
+.iv-table tr.overcharge td{background:rgba(239,68,68,.04)}
+.iv-table tr.notfound td{background:rgba(217,119,6,.04)}
+.iv-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:600;white-space:nowrap}
+.iv-badge.ok{background:#e8f5ec;color:var(--green)}
+.iv-badge.save{background:#e8f5ec;color:#166534}
+.iv-badge.over{background:#fef2f2;color:var(--red)}
+.iv-badge.miss{background:#fff7ed;color:var(--amber)}
+.iv-table-wrap{max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:10px}
+.iv-reset{background:none;border:1px solid var(--border);color:var(--muted2);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-family:var(--font)}
+.iv-reset:hover{border-color:var(--red);color:var(--red)}
+
 /* ALERTS */
 .notif{background:var(--bg2);border-radius:14px;padding:16px;border-left:3px solid;margin-bottom:10px;transition:all .15s;box-shadow:0 1px 3px rgba(0,0,0,.03)}
 .notif:hover{box-shadow:0 2px 8px rgba(0,0,0,.06)}
@@ -2323,6 +2365,347 @@ function VendorFormPage() {
   );
 }
 
+// ─── INVOICE VERIFIER ────────────────────────────────────────────────────────
+function InvoiceVerifier({ toast }) {
+  const [invoiceFile, setInvoiceFile] = useState(null);
+  const [menuFile, setMenuFile] = useState(null);
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const invoiceRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Parse PDF invoice text using pdf.js
+  const parsePDF = async (file) => {
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(" ") + "\n";
+    }
+    return text;
+  };
+
+  // Extract invoice line items from raw PDF text
+  const parseInvoiceItems = (text) => {
+    const items = [];
+    // Split into chunks by BATCH/SKU pattern
+    const chunks = text.split(/(?=BATCH\/SKU:)/i);
+    for (const chunk of chunks) {
+      const batchMatch = chunk.match(/BATCH\/SKU:\s*([\w\-]+)/i);
+      if (!batchMatch) continue;
+      const batch = batchMatch[1];
+
+      // Get price fields — look for patterns of numbers that represent unit/discount/case/qty/units/total
+      // The invoice format shows: UNIT PRICE, DISCOUNT PRICE, CASE PRICE, QTY, UNITS, TOTAL
+      const nums = [];
+      const numRe = /\$?([\d,]+\.[\d]{2})/g;
+      let m;
+      while ((m = numRe.exec(chunk)) !== null) nums.push(parseFloat(m[1].replace(",", "")));
+
+      // Also extract plain integers for qty/units
+      const allNums = [];
+      const allNumRe = /(?<!\w)([\d,]+\.?\d*)/g;
+      while ((m = allNumRe.exec(chunk)) !== null) {
+        const v = parseFloat(m[1].replace(",", ""));
+        if (!isNaN(v) && v > 0) allNums.push(v);
+      }
+
+      // Find the product name — it's the text before BATCH/SKU in the original text
+      // Look backwards from BATCH/SKU to find item name
+      const fullIdx = text.indexOf("BATCH/SKU: " + batch);
+      let itemName = "";
+      if (fullIdx >= 0) {
+        // Search backwards for the item name (appears before the batch line)
+        const before = text.substring(Math.max(0, fullIdx - 400), fullIdx);
+        // Look for known product patterns
+        const namePatterns = [
+          /(?:Anthem|Select|Grassroots|Find\.|Curaleaf)[^\n$]*?(?=\s*(?:\(|BATCH))/gi,
+          /([\w.]+(?:\s+\w+){2,}(?:\s+[\d.]+g)?(?:\s*-\s*(?:Hybrid|Indica|Sativa)\s*(?::\s*[\w\s]+)?))/gi,
+        ];
+        for (const pat of namePatterns) {
+          const matches = [...before.matchAll(pat)];
+          if (matches.length > 0) {
+            itemName = matches[matches.length - 1][0].trim();
+            break;
+          }
+        }
+        if (!itemName) {
+          // Fallback: grab last meaningful line before BATCH
+          const lines = before.split(/\n/).filter(l => l.trim().length > 5);
+          if (lines.length) itemName = lines[lines.length - 1].trim();
+        }
+      }
+
+      // Clean up item name
+      itemName = itemName.replace(/\s+/g, " ").replace(/\(\d+\.?\d*g,\s*case of \d+\)/gi, "").trim();
+      // Remove trailing size info like "(1g," etc
+      itemName = itemName.replace(/\s*\(\d+.*$/, "").trim();
+
+      // From the numbers array: discount price is what we're billed per unit, total is the last big number
+      let unitPrice = null, discountPrice = null, casePrice = null, total = null, units = null;
+      if (nums.length >= 4) {
+        unitPrice = nums[0];
+        discountPrice = nums[1];
+        casePrice = nums[2];
+        total = nums[nums.length - 1];
+      } else if (nums.length >= 2) {
+        discountPrice = nums[0];
+        total = nums[nums.length - 1];
+      }
+
+      // Find units count
+      const unitsMatch = chunk.match(/(\d+)\s*\$[\d,]+\.[\d]{2}\s*$/);
+      if (!unitsMatch) {
+        // Try to derive from case price and discount price
+        if (casePrice && discountPrice && discountPrice > 0) {
+          units = Math.round(casePrice / discountPrice);
+        }
+      }
+
+      if (discountPrice !== null && itemName) {
+        items.push({
+          name: itemName,
+          batch,
+          unitPrice: unitPrice || discountPrice,
+          discountPrice,
+          casePrice,
+          total,
+          units: units || (total && discountPrice ? Math.round(total / discountPrice) : null),
+        });
+      }
+    }
+    return items;
+  };
+
+  // Parse Excel wholesale menu
+  const parseMenu = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const wb = window.XLSX.read(e.target.result, { type: "array" });
+        const menu = {};
+        for (const sheetName of wb.SheetNames) {
+          const ws = wb.Sheets[sheetName];
+          const data = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+          // Find header row with "PRODUCT NAME" or column patterns
+          let nameCol = -1, priceCol = -1, msrpCol = -1, batchCol = -1, binCol = -1;
+          for (let r = 0; r < Math.min(10, data.length); r++) {
+            const row = data[r];
+            if (!row) continue;
+            for (let c = 0; c < row.length; c++) {
+              const v = String(row[c] || "").toLowerCase().trim();
+              if (v === "product name") nameCol = c;
+              if (v.includes("gold") && v.includes("$")) priceCol = c;
+              if (v === "msrp $" || v === "msrp") msrpCol = c;
+              if (v === "batch #" || v === "batch") batchCol = c;
+              if (v === "bin size") binCol = c;
+            }
+          }
+          if (nameCol < 0) { nameCol = 1; } // Default: column B
+          if (priceCol < 0) { priceCol = 11; } // Default: column L
+
+          for (let r = 3; r < data.length; r++) {
+            const row = data[r];
+            if (!row) continue;
+            const name = row[nameCol];
+            const price = row[priceCol];
+            const batch = batchCol >= 0 ? row[batchCol] : null;
+            const msrp = msrpCol >= 0 ? row[msrpCol] : null;
+            const bin = binCol >= 0 ? row[binCol] : null;
+            if (name && typeof price === "number" && price > 0) {
+              const key = String(name).trim();
+              menu[key] = { price, batch: String(batch || ""), msrp, bin, name: key };
+            }
+            // Also check for volume discount notes
+            if (name && typeof name === "string" && (name.includes("GET FOR $") || name.includes("BUY"))) {
+              const promoMatch = name.match(/GET FOR \$([\d.]+)/i);
+              if (promoMatch) {
+                menu["__promo_" + r] = { note: name, promoPrice: parseFloat(promoMatch[1]) };
+              }
+            }
+          }
+        }
+        resolve(menu);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  // Match invoice items to menu items
+  const matchItems = (invoiceItems, menu) => {
+    const menuEntries = Object.entries(menu).filter(([k]) => !k.startsWith("__promo_"));
+    const results = [];
+    for (const inv of invoiceItems) {
+      let matched = null;
+      // 1. Try batch match
+      for (const [, mdata] of menuEntries) {
+        if (inv.batch && mdata.batch && mdata.batch.includes(inv.batch)) {
+          matched = mdata; break;
+        }
+      }
+      // 2. Try name matching (fuzzy)
+      if (!matched) {
+        const invLower = inv.name.toLowerCase();
+        const invWords = invLower.split(/[\s\-:]+/).filter(w => w.length > 2);
+        let bestScore = 0;
+        for (const [, mdata] of menuEntries) {
+          const menuLower = mdata.name.toLowerCase();
+          // Count matching words
+          const score = invWords.filter(w => menuLower.includes(w)).length;
+          // Require at least 40% match and better than previous
+          if (score > bestScore && score >= Math.max(2, invWords.length * 0.35)) {
+            bestScore = score; matched = mdata;
+          }
+        }
+      }
+
+      const menuPrice = matched ? matched.price : null;
+      const diff = menuPrice !== null ? +(inv.discountPrice - menuPrice).toFixed(2) : null;
+      let status;
+      if (!matched) status = "notfound";
+      else if (Math.abs(diff) < 0.02) status = "match";
+      else if (diff < 0) status = "cheaper"; // Invoice cheaper = good for you
+      else status = "overcharge"; // Invoice higher = bad
+
+      results.push({
+        ...inv,
+        menuName: matched ? matched.name : null,
+        menuPrice,
+        msrp: matched ? matched.msrp : null,
+        diff,
+        status,
+      });
+    }
+    return results;
+  };
+
+  const runVerification = async () => {
+    if (!invoiceFile || !menuFile) { toast.show("Please upload both files"); return; }
+    setLoading(true); setResults(null);
+    try {
+      setStatus("Reading invoice PDF...");
+      const pdfText = await parsePDF(invoiceFile);
+      setStatus("Parsing invoice line items...");
+      const invoiceItems = parseInvoiceItems(pdfText);
+      if (invoiceItems.length === 0) { toast.show("Could not parse invoice items from PDF", "error"); setLoading(false); return; }
+      setStatus("Reading wholesale menu (" + menuFile.name + ")...");
+      const menu = await parseMenu(menuFile);
+      const menuCount = Object.keys(menu).filter(k => !k.startsWith("__promo_")).length;
+      if (menuCount === 0) { toast.show("No products found in menu file", "error"); setLoading(false); return; }
+      setStatus("Comparing " + invoiceItems.length + " invoice items against " + menuCount + " menu products...");
+      const compared = matchItems(invoiceItems, menu);
+      setResults(compared);
+      setStatus("");
+      const overcharges = compared.filter(r => r.status === "overcharge").length;
+      if (overcharges > 0) toast.show(overcharges + " overcharge(s) found!", "error");
+      else toast.show("Invoice verified — no overcharges!");
+    } catch (err) {
+      console.error(err);
+      toast.show("Error: " + err.message, "error");
+    }
+    setLoading(false);
+  };
+
+  const handleDrop = (setter, accept) => ({
+    onDragOver: (e) => { e.preventDefault(); e.currentTarget.classList.add("dragover"); },
+    onDragLeave: (e) => { e.currentTarget.classList.remove("dragover"); },
+    onDrop: (e) => { e.preventDefault(); e.currentTarget.classList.remove("dragover"); const f = e.dataTransfer.files[0]; if (f) setter(f); },
+  });
+
+  const summary = results ? {
+    total: results.length,
+    match: results.filter(r => r.status === "match").length,
+    cheaper: results.filter(r => r.status === "cheaper").length,
+    overcharge: results.filter(r => r.status === "overcharge").length,
+    notfound: results.filter(r => r.status === "notfound").length,
+    totalSaved: results.filter(r => r.status === "cheaper").reduce((s, r) => s + Math.abs(r.diff) * (r.units || 1), 0),
+    totalOver: results.filter(r => r.status === "overcharge").reduce((s, r) => s + r.diff * (r.units || 1), 0),
+  } : null;
+
+  return (
+    <div className="iv-wrap">
+      <div className="iv-header">
+        <div className="iv-title">Invoice Verifier</div>
+        {results && <button className="iv-reset" onClick={() => { setResults(null); setInvoiceFile(null); setMenuFile(null); }}>Reset</button>}
+      </div>
+      {!results && <>
+        <div className="iv-uploads">
+          <div className={"iv-drop-zone" + (invoiceFile ? " has-file" : "")} onClick={() => invoiceRef.current?.click()} {...handleDrop(setInvoiceFile, ".pdf")}>
+            <input type="file" ref={invoiceRef} accept=".pdf" style={{display:"none"}} onChange={e => { if(e.target.files[0]) setInvoiceFile(e.target.files[0]); }} />
+            {invoiceFile ? <>
+              <div className="iv-drop-icon">&#10003;</div>
+              <div className="iv-drop-file">{invoiceFile.name}</div>
+              <div className="iv-drop-label">Invoice PDF loaded</div>
+            </> : <>
+              <div className="iv-drop-icon">&#128196;</div>
+              <div className="iv-drop-label">Drop Invoice PDF here</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>or click to browse</div>
+            </>}
+          </div>
+          <div className={"iv-drop-zone" + (menuFile ? " has-file" : "")} onClick={() => menuRef.current?.click()} {...handleDrop(setMenuFile, ".xlsx")}>
+            <input type="file" ref={menuRef} accept=".xlsx,.xls,.csv" style={{display:"none"}} onChange={e => { if(e.target.files[0]) setMenuFile(e.target.files[0]); }} />
+            {menuFile ? <>
+              <div className="iv-drop-icon">&#10003;</div>
+              <div className="iv-drop-file">{menuFile.name}</div>
+              <div className="iv-drop-label">Wholesale menu loaded</div>
+            </> : <>
+              <div className="iv-drop-icon">&#128202;</div>
+              <div className="iv-drop-label">Drop Wholesale Menu here</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>Excel (.xlsx) or CSV</div>
+            </>}
+          </div>
+        </div>
+        <button className="iv-btn" disabled={!invoiceFile || !menuFile || loading} onClick={runVerification}>
+          {loading ? "Verifying..." : "Verify Invoice"}
+        </button>
+        {status && <div className="iv-progress">{status}</div>}
+      </>}
+      {results && summary && <>
+        <div className="iv-summary">
+          <div className="iv-stat ok"><div className="iv-stat-num">{summary.match}</div><div className="iv-stat-label">Price Match</div></div>
+          <div className={"iv-stat" + (summary.cheaper > 0 ? " ok" : "")}><div className="iv-stat-num">{summary.cheaper}</div><div className="iv-stat-label">Discounted</div></div>
+          <div className={"iv-stat" + (summary.overcharge > 0 ? " err" : " ok")}><div className="iv-stat-num">{summary.overcharge}</div><div className="iv-stat-label">Overcharged</div></div>
+          <div className={"iv-stat" + (summary.notfound > 0 ? " warn" : "")}><div className="iv-stat-num">{summary.notfound}</div><div className="iv-stat-label">Not Found</div></div>
+        </div>
+        {(summary.totalSaved > 0 || summary.totalOver > 0) && (
+          <div style={{display:"flex",gap:12,marginBottom:16,justifyContent:"center",flexWrap:"wrap"}}>
+            {summary.totalSaved > 0 && <div style={{background:"#e8f5ec",color:"#166534",padding:"8px 16px",borderRadius:8,fontSize:13,fontWeight:600}}>You saved ${summary.totalSaved.toFixed(2)} vs menu prices</div>}
+            {summary.totalOver > 0 && <div style={{background:"#fef2f2",color:"var(--red)",padding:"8px 16px",borderRadius:8,fontSize:13,fontWeight:600}}>Overcharged by ${summary.totalOver.toFixed(2)}</div>}
+          </div>
+        )}
+        <div className="iv-table-wrap">
+          <table className="iv-table">
+            <thead><tr><th>Item</th><th>Invoice $/unit</th><th>Menu $/unit</th><th>Diff</th><th>Units</th><th>Total</th><th>Status</th></tr></thead>
+            <tbody>
+              {results.map((r, i) => (
+                <tr key={i} className={r.status}>
+                  <td style={{maxWidth:220,fontWeight:500}}><div style={{lineHeight:1.3}}>{r.name}</div>{r.batch && <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--mono)"}}>{r.batch}</div>}</td>
+                  <td style={{fontFamily:"var(--mono)"}}>${r.discountPrice?.toFixed(2)}</td>
+                  <td style={{fontFamily:"var(--mono)"}}>{r.menuPrice !== null ? "$" + r.menuPrice.toFixed(2) : "—"}</td>
+                  <td style={{fontFamily:"var(--mono)",fontWeight:600,color: r.diff > 0.01 ? "var(--red)" : r.diff < -0.01 ? "var(--green)" : "var(--text)"}}>
+                    {r.diff !== null ? (r.diff > 0 ? "+" : "") + r.diff.toFixed(2) : "—"}
+                  </td>
+                  <td style={{fontFamily:"var(--mono)"}}>{r.units || "—"}</td>
+                  <td style={{fontFamily:"var(--mono)"}}>{r.total ? "$" + r.total.toFixed(2) : "—"}</td>
+                  <td>
+                    {r.status === "match" && <span className="iv-badge ok">Match</span>}
+                    {r.status === "cheaper" && <span className="iv-badge save">Savings</span>}
+                    {r.status === "overcharge" && <span className="iv-badge over">Overcharge</span>}
+                    {r.status === "notfound" && <span className="iv-badge miss">Not Found</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>}
+    </div>
+  );
+}
+
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
 function AdminVendor({ notifications, setNotifications, toast, settings }) {
   const [fields, setFields] = useState(() => {
@@ -2471,6 +2854,7 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
           </div>
         </div>
       </div>
+      <InvoiceVerifier toast={toast} />
     </div>
   );
 }
