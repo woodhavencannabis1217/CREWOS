@@ -1848,11 +1848,75 @@ function AdminPayroll({ employees, setEmployees, clockLogs, overrides, setOverri
 }
 
 // ─── ADMIN: TASKS ────────────────────────────────────────────────────────────
-function AdminTasks({ tasks, setTasks, toast }) {
+function AdminTasks({ tasks, setTasks, taskTypes, setTaskTypes, toast }) {
   const [activeTab, setActiveTab] = useState("daily");
   const [showModal, setShowModal] = useState(false);
   const [editTask, setEditTask] = useState(null);
   const [form, setForm] = useState({ category:"daily", title:"", desc:"", duration:5, scheduledTime:"09:05", frequency:1, order:1, role:"A", requirePhoto:false });
+
+  // Custom Task Types state
+  const [showTypeModal, setShowTypeModal] = useState(false);
+  const [editingType, setEditingType] = useState(null);
+  const [typeForm, setTypeForm] = useState({ name: "", color: "#10b981" });
+  const [showStepModal, setShowStepModal] = useState(false);
+  const [editingStep, setEditingStep] = useState(null);
+  const [stepForm, setStepForm] = useState({ title: "", duration: 5, requirePhoto: false });
+  const [expandedType, setExpandedType] = useState(null);
+  const [activeTypeId, setActiveTypeId] = useState(null);
+  const presetColors = ["#10b981", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6", "#ec4899", "#14b8a6", "#f97316"];
+
+  const saveType = () => {
+    if (!typeForm.name.trim()) return;
+    if (editingType) {
+      setTaskTypes(prev => prev.map(tt => tt.id === editingType ? { ...tt, name: typeForm.name, color: typeForm.color } : tt));
+      toast.show("Task type updated");
+    } else {
+      setTaskTypes(prev => [...prev, { id: uid(), name: typeForm.name, color: typeForm.color, steps: [] }]);
+      toast.show("Task type created");
+    }
+    setShowTypeModal(false); setEditingType(null);
+  };
+
+  const deleteType = (id) => { setTaskTypes(prev => prev.filter(tt => tt.id !== id)); toast.show("Task type deleted", "warning"); };
+
+  const openEditType = (tt) => { setTypeForm({ name: tt.name, color: tt.color }); setEditingType(tt.id); setShowTypeModal(true); };
+
+  const saveStep = () => {
+    if (!stepForm.title.trim() || !activeTypeId) return;
+    setTaskTypes(prev => prev.map(tt => {
+      if (tt.id !== activeTypeId) return tt;
+      if (editingStep) {
+        return { ...tt, steps: tt.steps.map(s => s.id === editingStep ? { ...s, title: stepForm.title, duration: stepForm.duration, requirePhoto: stepForm.requirePhoto } : s) };
+      } else {
+        const maxOrder = tt.steps.length > 0 ? Math.max(...tt.steps.map(s => s.order || 0)) : 0;
+        return { ...tt, steps: [...tt.steps, { id: uid(), title: stepForm.title, duration: stepForm.duration, requirePhoto: stepForm.requirePhoto, order: maxOrder + 1 }] };
+      }
+    }));
+    toast.show(editingStep ? "Step updated" : "Step added");
+    setShowStepModal(false); setEditingStep(null);
+  };
+
+  const deleteStep = (typeId, stepId) => {
+    setTaskTypes(prev => prev.map(tt => tt.id === typeId ? { ...tt, steps: tt.steps.filter(s => s.id !== stepId) } : tt));
+    toast.show("Step deleted", "warning");
+  };
+
+  const moveStep = (typeId, stepId, dir) => {
+    setTaskTypes(prev => prev.map(tt => {
+      if (tt.id !== typeId) return tt;
+      const sorted = [...tt.steps].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const idx = sorted.findIndex(s => s.id === stepId);
+      const ni = idx + dir;
+      if (ni < 0 || ni >= sorted.length) return tt;
+      const other = sorted[ni];
+      const current = sorted[idx];
+      return { ...tt, steps: tt.steps.map(s => {
+        if (s.id === current.id) return { ...s, order: other.order };
+        if (s.id === other.id) return { ...s, order: current.order };
+        return s;
+      })};
+    }));
+  };
 
   const dailyTasks = tasks.filter(t => t.category === "daily");
   const deliveryTasks = tasks.filter(t => t.category === "delivery");
@@ -1975,6 +2039,7 @@ function AdminTasks({ tasks, setTasks, toast }) {
         <div className={"period-tab"+(activeTab==="daily"?" on":"")} onClick={() => setActiveTab("daily")}>Daily Tasks ({dailyTasks.length})</div>
         <div className={"period-tab"+(activeTab==="delivery"?" on":"")} onClick={() => setActiveTab("delivery")}>Delivery Tasks ({deliveryTasks.length})</div>
         <div className={"period-tab"+(activeTab==="status"?" on":"")} onClick={() => setActiveTab("status")}>&#128202; Task Status</div>
+        <div className={"period-tab"+(activeTab==="custom"?" on":"")} onClick={() => setActiveTab("custom")}>&#127912; Custom Types ({taskTypes.length})</div>
       </div>
 
       {activeTab === "daily" && (
@@ -2089,6 +2154,96 @@ function AdminTasks({ tasks, setTasks, toast }) {
               })()}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ═══ CUSTOM TYPES TAB ═══ */}
+      {activeTab === "custom" && (
+        <div>
+          <div className="row" style={{marginBottom:14}}>
+            <div style={{fontSize:12,color:"var(--muted2)"}}>Create custom task types with ordered steps. Attach them to announcements.</div>
+            <div className="spacer" />
+            <button className="btn primary small" onClick={() => { setTypeForm({ name: "", color: "#10b981" }); setEditingType(null); setShowTypeModal(true); }}>+ New Task Type</button>
+          </div>
+          {taskTypes.length === 0 && <div style={{color:"var(--muted2)",fontSize:13,padding:"30px 0",textAlign:"center"}}>No custom task types yet.</div>}
+          {taskTypes.map(tt => {
+            const isExpanded = expandedType === tt.id;
+            const sortedSteps = [...tt.steps].sort((a, b) => (a.order || 0) - (b.order || 0));
+            return (
+              <div key={tt.id} className="task-card" style={{marginBottom:12,borderLeft:"4px solid " + tt.color}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={() => setExpandedType(isExpanded ? null : tt.id)}>
+                  <div style={{width:12,height:12,borderRadius:"50%",background:tt.color,flexShrink:0}} />
+                  <div style={{flex:1,fontWeight:600,fontSize:14}}>{tt.name}</div>
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{tt.steps.length} step{tt.steps.length !== 1 ? "s" : ""}</span>
+                  <span style={{fontSize:12,color:"var(--muted2)",transition:"transform .2s",transform:isExpanded?"rotate(180deg)":"rotate(0deg)"}}>&#9660;</span>
+                </div>
+                {isExpanded && (
+                  <div style={{marginTop:12}}>
+                    <div style={{display:"flex",gap:8,marginBottom:10}}>
+                      <button className="btn small" onClick={() => openEditType(tt)}>Edit Type</button>
+                      <button className="btn small danger" onClick={() => deleteType(tt.id)}>Delete Type</button>
+                      <div className="spacer" />
+                      <button className="btn small primary" onClick={() => { setActiveTypeId(tt.id); setStepForm({ title: "", duration: 5, requirePhoto: false }); setEditingStep(null); setShowStepModal(true); }}>+ Add Step</button>
+                    </div>
+                    {sortedSteps.length === 0 && <div style={{color:"var(--muted2)",fontSize:12,padding:"14px 0",textAlign:"center"}}>No steps yet. Add steps to this task type.</div>}
+                    {sortedSteps.map((step, idx) => (
+                      <div key={step.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"var(--surface)",borderRadius:8,marginBottom:6,border:"1px solid var(--border)"}}>
+                        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                          <button className="btn ghost small" onClick={() => moveStep(tt.id, step.id, -1)} disabled={idx === 0} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9650;</button>
+                          <button className="btn ghost small" onClick={() => moveStep(tt.id, step.id, 1)} disabled={idx === sortedSteps.length - 1} style={{padding:"2px 6px",fontSize:10,lineHeight:1}}>&#9660;</button>
+                        </div>
+                        <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--mono)",minWidth:24}}>#{idx + 1}</span>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13,fontWeight:500}}>{step.title}</div>
+                          <div style={{fontSize:11,color:"var(--muted2)"}}>&#9201; {step.duration} min{step.requirePhoto ? " | \uD83D\uDCF7 Photo required" : ""}</div>
+                        </div>
+                        <button className="btn small" onClick={() => { setActiveTypeId(tt.id); setStepForm({ title: step.title, duration: step.duration, requirePhoto: step.requirePhoto }); setEditingStep(step.id); setShowStepModal(true); }}>Edit</button>
+                        <button className="btn small danger" onClick={() => deleteStep(tt.id, step.id)}>Delete</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Task Type Modal */}
+      {showTypeModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowTypeModal(false)}>
+          <div className="modal">
+            <div className="modal-title">{editingType ? "Edit Task Type" : "New Task Type"}</div>
+            <div className="form-group"><label>Type Name</label><input type="text" value={typeForm.name} onChange={e => setTypeForm(f => ({...f, name: e.target.value}))} placeholder="e.g. Promotion, Cleaning, Inventory Check" /></div>
+            <div className="form-group"><label>Color</label>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                {presetColors.map(c => (
+                  <div key={c} onClick={() => setTypeForm(f => ({...f, color: c}))} style={{width:32,height:32,borderRadius:"50%",background:c,cursor:"pointer",border:typeForm.color === c ? "3px solid var(--text)" : "3px solid transparent",transition:"border .15s"}} />
+                ))}
+              </div>
+            </div>
+            <div className="modal-actions"><button className="btn" onClick={() => setShowTypeModal(false)}>Cancel</button><button className="btn primary" onClick={saveType}>{editingType ? "Save Changes" : "Create Type"}</button></div>
+          </div>
+        </div>
+      )}
+
+      {/* Step Modal */}
+      {showStepModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowStepModal(false)}>
+          <div className="modal">
+            <div className="modal-title">{editingStep ? "Edit Step" : "Add Step"}</div>
+            <div className="form-group"><label>Step Title</label><input type="text" value={stepForm.title} onChange={e => setStepForm(f => ({...f, title: e.target.value}))} placeholder="e.g. Check expiration dates" /></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div className="form-group"><label>Duration (min)</label><input type="number" min={1} value={stepForm.duration} onChange={e => setStepForm(f => ({...f, duration: parseInt(e.target.value) || 1}))} /></div>
+              <div className="form-group" style={{display:"flex",alignItems:"center"}}>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginTop:20}}>
+                  <input type="checkbox" checked={!!stepForm.requirePhoto} onChange={e => setStepForm(f => ({...f, requirePhoto: e.target.checked}))} style={{width:18,height:18,accentColor:"var(--primary)"}} />
+                  <span>&#128247; Require Photo</span>
+                </label>
+              </div>
+            </div>
+            <div className="modal-actions"><button className="btn" onClick={() => setShowStepModal(false)}>Cancel</button><button className="btn primary" onClick={saveStep}>{editingStep ? "Save Changes" : "Add Step"}</button></div>
+          </div>
         </div>
       )}
 
@@ -2268,20 +2423,51 @@ function NfcClockPage() {
   const fbUrl = decodeURIComponent(hashParams.get("fb") || "");
   const locId = hashParams.get("loc") || "";
 
-  const [phase, setPhase] = useState("pin"); // pin | loading | action | processing | done | error
+  // Check if employee is remembered on this device
+  const remembered = (() => { try { return JSON.parse(localStorage.getItem("crewos_nfc_employee")); } catch { return null; } })();
+
+  const [phase, setPhase] = useState(remembered ? "loading" : "pin"); // pin | loading | action | processing | done | error
   const [pin, setPin] = useState([]);
   const [pinError, setPinError] = useState("");
   const [shake, setShake] = useState(false);
-  const [employee, setEmployee] = useState(null);
+  const [employee, setEmployee] = useState(remembered || null);
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [clockType, setClockType] = useState(null); // "in" or "out" for done screen
   const [clockTime, setClockTime] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [employees, setEmployees] = useState([]);
 
-  // Validate params
+  // Load clock status for remembered employee (skip PIN)
+  const loadClockStatus = async (emp) => {
+    setPhase("loading");
+    try {
+      const data = await firebaseGet(fbUrl, "crewos_data");
+      if (!data || !data.employees) { setPhase("error"); setErrorMsg("Could not connect to server. Please try again."); return; }
+      // Verify employee still exists
+      const current = data.employees.find(e => e.id === emp.id);
+      if (!current) {
+        localStorage.removeItem("crewos_nfc_employee");
+        setEmployee(null);
+        setPhase("pin");
+        setPinError("Employee not found. Please enter your PIN.");
+        return;
+      }
+      setEmployee(current);
+      setEmployees(data.employees);
+      const logs = data.clockLogs || [];
+      const myLogs = logs.filter(l => l.employeeId === current.id);
+      const lastLog = myLogs[myLogs.length - 1];
+      setIsClockedIn(lastLog && lastLog.type === "in");
+      setPhase("action");
+    } catch (err) {
+      setPhase("error"); setErrorMsg("Connection failed: " + err.message);
+    }
+  };
+
+  // Validate params & auto-load remembered employee
   useEffect(() => {
-    if (!fbUrl) { setPhase("error"); setErrorMsg("Invalid NFC tag — no sync URL found. Please contact your admin."); }
+    if (!fbUrl) { setPhase("error"); setErrorMsg("Invalid NFC tag — no sync URL found. Please contact your admin."); return; }
+    if (remembered) loadClockStatus(remembered);
   }, []);
 
   const addPin = (d) => {
@@ -2304,6 +2490,8 @@ function NfcClockPage() {
             setTimeout(() => { setShake(false); setPin([]); }, 500);
             return;
           }
+          // Remember employee on this device
+          localStorage.setItem("crewos_nfc_employee", JSON.stringify({ id: emp.id, name: emp.name }));
           setEmployee(emp);
           // Determine if currently clocked in
           const logs = data.clockLogs || [];
@@ -2406,7 +2594,7 @@ function NfcClockPage() {
               Clock Out
             </button>
           </div>
-          <button className="btn ghost" style={{width:"100%"}} onClick={() => { setPhase("pin"); setPin([]); setEmployee(null); }}>Switch Employee</button>
+          <button className="btn ghost" style={{width:"100%"}} onClick={() => { localStorage.removeItem("crewos_nfc_employee"); setPhase("pin"); setPin([]); setEmployee(null); }}>Switch Employee</button>
         </div>
       </div>
     );
@@ -3004,15 +3192,29 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
                     <button className="btn small danger" onClick={() => {
                       const updated = JSON.parse(localStorage.getItem("crewos_pending_deliveries") || "[]").filter(x => x.id !== d.id);
                       localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
-                      // Also remove from Firebase pending_delivery
+                      // Also remove from Firebase pending_delivery AND deliveries
                       if (fbUrl) {
-                        fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery.json")
+                        const base = fbUrl.replace(/\/+$/, "");
+                        // Remove from pending_delivery
+                        fetch(base + "/pending_delivery.json")
                           .then(r => r.json())
                           .then(data => {
                             if (data && typeof data === "object") {
                               Object.entries(data).forEach(([key, val]) => {
                                 if (val && val.id === d.id) {
-                                  fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery/" + key + ".json", { method: "DELETE" }).catch(() => {});
+                                  fetch(base + "/pending_delivery/" + key + ".json", { method: "DELETE" }).catch(() => {});
+                                }
+                              });
+                            }
+                          }).catch(() => {});
+                        // Remove from deliveries path too
+                        fetch(base + "/deliveries.json")
+                          .then(r => r.json())
+                          .then(data => {
+                            if (data && typeof data === "object") {
+                              Object.entries(data).forEach(([key, val]) => {
+                                if (val && val.id === d.id) {
+                                  fetch(base + "/deliveries/" + key + ".json", { method: "DELETE" }).catch(() => {});
                                 }
                               });
                             }
@@ -3026,9 +3228,11 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
                 ))}
                 <button className="btn small" style={{marginTop:8,width:"100%"}} onClick={() => {
                   localStorage.setItem("crewos_pending_deliveries", "[]");
-                  // Clear all from Firebase
+                  // Clear all from Firebase (both paths)
                   if (fbUrl) {
-                    fetch(fbUrl.replace(/\/+$/, "") + "/pending_delivery.json", { method: "DELETE" }).catch(() => {});
+                    const base = fbUrl.replace(/\/+$/, "");
+                    fetch(base + "/pending_delivery.json", { method: "DELETE" }).catch(() => {});
+                    fetch(base + "/deliveries.json", { method: "DELETE" }).catch(() => {});
                   }
                   toast.show("All active deliveries cleared", "warning");
                   setDeliveryLog(prev => [...prev]);
@@ -3563,26 +3767,32 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
         const todayDeliveries = allDeliveries.filter(d =>
           (Date.now() - d.timestamp) < 24 * 60 * 60 * 1000
         );
-        if (todayDeliveries.length > 0) {
-          setPendingDeliveries(prev => {
-            let updated = [...prev];
-            let changed = false;
-            todayDeliveries.forEach(delivery => {
-              const deliveryId = delivery.id || delivery.company + "_" + delivery.timestamp;
-              if (!updated.some(d => d.id === deliveryId) && !completedDeliveryIds.has(deliveryId)) {
-                const company = delivery.company || "Unknown Vendor";
-                const timeStr = delivery.time || "";
-                updated.push({ company, time: timeStr, id: deliveryId });
-                changed = true;
-              }
-            });
-            if (changed) {
-              localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
-              setActiveSection("delivery_" + updated[updated.length - 1].id);
+        // Build set of valid delivery IDs from Firebase
+        const fbDeliveryIds = new Set(todayDeliveries.map(d => d.id || d.company + "_" + d.timestamp));
+        setPendingDeliveries(prev => {
+          let updated = [...prev];
+          let changed = false;
+          // Add new deliveries from Firebase
+          todayDeliveries.forEach(delivery => {
+            const deliveryId = delivery.id || delivery.company + "_" + delivery.timestamp;
+            if (!updated.some(d => d.id === deliveryId) && !completedDeliveryIds.has(deliveryId)) {
+              const company = delivery.company || "Unknown Vendor";
+              const timeStr = delivery.time || "";
+              updated.push({ company, time: timeStr, id: deliveryId });
+              changed = true;
             }
-            return changed ? updated : prev;
           });
-        }
+          // Remove deliveries that are no longer on Firebase (admin cleared them)
+          const before = updated.length;
+          updated = updated.filter(d => fbDeliveryIds.has(d.id) || completedDeliveryIds.has(d.id));
+          if (updated.length !== before) changed = true;
+          if (changed) {
+            localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
+            if (updated.length > 0) setActiveSection("delivery_" + updated[updated.length - 1].id);
+            else setActiveSection("daily");
+          }
+          return changed ? updated : prev;
+        });
       } catch {}
     };
 
@@ -4013,13 +4223,14 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
 
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
 // ─── ANNOUNCEMENTS PANEL (always visible) ─────────────────────────────────
-function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, toast }) {
+function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, toast, taskTypes, tasks }) {
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState("");
   const [assignTo, setAssignTo] = useState("");
   const [duration, setDuration] = useState("");
   const [photoData, setPhotoData] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [taskTypeId, setTaskTypeId] = useState("");
   const photoRef = useRef(null);
   const [, setTick] = useState(0);
 
@@ -4052,11 +4263,12 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
       id: uid(), author: user.name, message: msg.trim(),
       assignedTo: assignTo || null, durationMinutes: duration ? Number(duration) : null,
       photo: photoData || null,
+      taskTypeId: taskTypeId || null, completedSteps: [],
       createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
       completed: false, completedAt: null,
     };
     setAnnouncements(prev => [ann, ...prev]);
-    setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setShowForm(false);
+    setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setTaskTypeId(""); setShowForm(false);
     toast.show("Announcement posted!");
   };
 
@@ -4085,6 +4297,17 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
 
   const staffList = employees.filter(e => e.role !== "admin");
 
+  const toggleStep = (annId, stepId) => {
+    setAnnouncements(prev => prev.map(a => {
+      if (a.id !== annId) return a;
+      const completed = a.completedSteps || [];
+      const newCompleted = completed.includes(stepId) ? completed.filter(s => s !== stepId) : [...completed, stepId];
+      const taskType = taskTypes.find(tt => tt.id === a.taskTypeId);
+      const allDone = taskType && newCompleted.length >= taskType.steps.length;
+      return { ...a, completedSteps: newCompleted, completed: allDone, completedAt: allDone ? new Date().toISOString() : a.completedAt };
+    }));
+  };
+
   return (
     <div className="ann-panel">
       <div className="ann-panel-header">
@@ -4101,6 +4324,14 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
             </select>
             <input type="number" placeholder="Minutes" min="1" max="480" value={duration} onChange={e => setDuration(e.target.value)} style={{width:90}} />
           </div>
+          {taskTypes && taskTypes.length > 0 && (
+            <div className="ann-form-row">
+              <select value={taskTypeId} onChange={e => setTaskTypeId(e.target.value)} style={{flex:1}}>
+                <option value="">Attach Task Type (optional)</option>
+                {taskTypes.map(tt => <option key={tt.id} value={tt.id}>{tt.name} ({tt.steps.length} steps)</option>)}
+              </select>
+            </div>
+          )}
           <div className="ann-form-row">
             <input type="file" accept="image/*" ref={photoRef} style={{display:"none"}} onChange={handlePhoto} />
             <button type="button" className="ann-photo-btn" onClick={() => photoRef.current?.click()}>
@@ -4145,8 +4376,39 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
               {a.durationMinutes && <span className="ann-tag time">{a.durationMinutes}m</span>}
               {a.completed && <span className="ann-tag completed">Done</span>}
               {a.accepted && !a.completed && <span className="ann-tag accepted">Accepted</span>}
+              {(() => { const tt = a.taskTypeId && taskTypes ? taskTypes.find(t => t.id === a.taskTypeId) : null; return tt ? <span className="ann-tag" style={{background: tt.color + "18", color: tt.color, fontWeight: 600}}>{tt.name}</span> : null; })()}
               <span className="ann-ago">{timeAgo(a.createdAt)}</span>
             </div>
+            {(() => {
+              if (!a.taskTypeId || !taskTypes) return null;
+              const tt = taskTypes.find(t => t.id === a.taskTypeId);
+              if (!tt || !tt.steps || tt.steps.length === 0) return null;
+              const completedSteps = a.completedSteps || [];
+              const sortedSteps = [...tt.steps].sort((x, y) => (x.order || 0) - (y.order || 0));
+              const canInteract = !a.assignedTo || a.assignedTo === user.name || a.author === user.name;
+              return (
+                <div style={{marginTop:8,padding:"8px 10px",background:"var(--surface)",borderRadius:8,border:"1px solid var(--border)"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontSize:12,fontWeight:600,color:tt.color}}>{tt.name} Steps</span>
+                    <span style={{fontSize:11,color:"var(--muted2)"}}>{completedSteps.length}/{sortedSteps.length} completed</span>
+                  </div>
+                  <div style={{height:4,background:"var(--border)",borderRadius:2,marginBottom:8}}>
+                    <div style={{height:4,background:tt.color,borderRadius:2,width:(sortedSteps.length > 0 ? (completedSteps.length / sortedSteps.length) * 100 : 0) + "%",transition:"width .3s"}} />
+                  </div>
+                  {sortedSteps.map((step, idx) => {
+                    const isDone = completedSteps.includes(step.id);
+                    return (
+                      <div key={step.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",opacity: isDone ? 0.6 : 1}}>
+                        <input type="checkbox" checked={isDone} onChange={() => canInteract && !a.completed && toggleStep(a.id, step.id)} disabled={!canInteract || a.completed} style={{width:16,height:16,accentColor:tt.color,cursor:canInteract && !a.completed ? "pointer" : "default"}} />
+                        <span style={{fontSize:12,textDecoration:isDone ? "line-through" : "none",flex:1}}>{idx + 1}. {step.title}</span>
+                        <span style={{fontSize:10,color:"var(--muted2)"}}>&#9201; {step.duration}m</span>
+                        {step.requirePhoto && <span style={{fontSize:10}}>&#128247;</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             {isTask && !a.completed && !a.accepted && (
               (!a.assignedTo || isAssignedToMe) ?
                 <button className="ann-accept-btn" onClick={() => acceptAnn(a.id)}>Accept Task</button> :
@@ -4248,6 +4510,7 @@ export default function App() {
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
   const [announcements, setAnnouncements] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_announcements"))||[]; } catch { return []; } });
+  const [taskTypes, setTaskTypes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_task_types"))||[]; } catch { return []; } });
 
   // Persist
   useEffect(() => { localStorage.setItem("crewos_employees", JSON.stringify(employees)); }, [employees]);
@@ -4260,6 +4523,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_drawer", JSON.stringify(drawerLogs)); }, [drawerLogs]);
   useEffect(() => { localStorage.setItem("crewos_shiftnotes", JSON.stringify(shiftNotes)); }, [shiftNotes]);
   useEffect(() => { localStorage.setItem("crewos_announcements", JSON.stringify(announcements)); }, [announcements]);
+  useEffect(() => { localStorage.setItem("crewos_task_types", JSON.stringify(taskTypes)); }, [taskTypes]);
 
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
@@ -4278,6 +4542,7 @@ export default function App() {
     ["drawerLogs", drawerLogs],
     ["shiftNotes", shiftNotes],
     ["announcements", announcements],
+    ["taskTypes", taskTypes],
   ];
 
   useEffect(() => {
@@ -4287,7 +4552,7 @@ export default function App() {
     if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
-      notifications, drawerLogs, shiftNotes, announcements,
+      notifications, drawerLogs, shiftNotes, announcements, taskTypes,
       settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
@@ -4369,6 +4634,7 @@ export default function App() {
           if (data.drawerLogs && JSON.stringify(data.drawerLogs) !== JSON.stringify(drawerLogs)) setDrawerLogs(data.drawerLogs);
           if (data.shiftNotes && JSON.stringify(data.shiftNotes) !== JSON.stringify(shiftNotes)) setShiftNotes(data.shiftNotes);
           if (data.announcements && JSON.stringify(data.announcements) !== JSON.stringify(announcements)) setAnnouncements(data.announcements);
+          if (data.taskTypes && JSON.stringify(data.taskTypes) !== JSON.stringify(taskTypes)) setTaskTypes(data.taskTypes);
         }
       } else if (isFirstPull) {
         // No data on Firebase yet — allow pushes to start
@@ -4700,13 +4966,13 @@ export default function App() {
           ))}
         </div>
 
-        <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} />
+        <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} taskTypes={taskTypes} tasks={tasks} />
 
         <div className="body">
           {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
-          {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} toast={toast} />}
+          {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
           {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
