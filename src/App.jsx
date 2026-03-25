@@ -332,6 +332,16 @@ input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
 .ann-form-row{display:flex;gap:8px;align-items:center}
 .ann-post-btn{background:var(--green);color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font)}
 .ann-cancel-btn{background:var(--bg5);color:var(--muted3);border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--font)}
+.ann-photo-btn{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1.5px dashed var(--border2);border-radius:6px;padding:8px 12px;cursor:pointer;color:var(--muted2);font-size:12px;font-family:var(--font);transition:all .15s;flex:1}
+.ann-photo-btn:hover{border-color:var(--green);color:var(--green)}
+.ann-photo-preview{position:relative;display:inline-block;margin-top:4px}
+.ann-photo-preview img{width:80px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border2)}
+.ann-photo-remove{position:absolute;top:-4px;right:-4px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+.ann-photo-attached{margin-top:6px}
+.ann-photo-thumb{max-width:180px;max-height:120px;border-radius:6px;border:1px solid var(--border);cursor:pointer;transition:opacity .15s}
+.ann-photo-thumb:hover{opacity:.85}
+.ann-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:10000;cursor:pointer;padding:20px}
+.ann-lightbox img{max-width:90%;max-height:90%;border-radius:10px}
 .ann-item{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px}
 .ann-item.pending{border-color:var(--amber)}
 .ann-item.active{border-color:var(--green)}
@@ -3369,6 +3379,9 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const [msg, setMsg] = useState("");
   const [assignTo, setAssignTo] = useState("");
   const [duration, setDuration] = useState("");
+  const [photoData, setPhotoData] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
+  const photoRef = useRef(null);
   const [, setTick] = useState(0);
 
   // Tick every second for countdown timers
@@ -3385,16 +3398,26 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
     return (now - new Date(a.completedAt).getTime()) < 3600000;
   });
 
+  const handlePhoto = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhotoData(ev.target.result);
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
   const postAnn = () => {
     if (!msg.trim()) { toast.show("Enter a message"); return; }
     const ann = {
       id: uid(), author: user.name, message: msg.trim(),
       assignedTo: assignTo || null, durationMinutes: duration ? Number(duration) : null,
+      photo: photoData || null,
       createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
       completed: false, completedAt: null,
     };
     setAnnouncements(prev => [ann, ...prev]);
-    setMsg(""); setAssignTo(""); setDuration(""); setShowForm(false);
+    setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setShowForm(false);
     toast.show("Announcement posted!");
   };
 
@@ -3440,8 +3463,20 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
             <input type="number" placeholder="Minutes" min="1" max="480" value={duration} onChange={e => setDuration(e.target.value)} style={{width:90}} />
           </div>
           <div className="ann-form-row">
+            <input type="file" accept="image/*" ref={photoRef} style={{display:"none"}} onChange={handlePhoto} />
+            <button type="button" className="ann-photo-btn" onClick={() => photoRef.current?.click()}>
+              📷 {photoData ? "Change Photo" : "Attach Photo"}
+            </button>
+          </div>
+          {photoData && (
+            <div className="ann-photo-preview">
+              <img src={photoData} alt="Preview" />
+              <button className="ann-photo-remove" onClick={() => { setPhotoData(null); if(photoRef.current) photoRef.current.value=""; }}>&times;</button>
+            </div>
+          )}
+          <div className="ann-form-row">
             <button className="ann-post-btn" onClick={postAnn}>Post</button>
-            <button className="ann-cancel-btn" onClick={() => setShowForm(false)}>Cancel</button>
+            <button className="ann-cancel-btn" onClick={() => { setShowForm(false); setPhotoData(null); }}>Cancel</button>
           </div>
         </div>
       )}
@@ -3460,6 +3495,11 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
               <div className="ann-item-msg">{a.message}</div>
               {isMyAnn && !a.completed && <button className="ann-del" onClick={() => deleteAnn(a.id)}>&times;</button>}
             </div>
+            {a.photo && (
+              <div className="ann-photo-attached">
+                <img src={a.photo} alt="Attached" className="ann-photo-thumb" onClick={() => setLightbox(a.photo)} />
+              </div>
+            )}
             <div className="ann-item-meta">
               <span className="ann-tag from">{a.author}</span>
               {a.assignedTo && <span className="ann-tag assign">{a.assignedTo}</span>}
@@ -3485,6 +3525,7 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           </div>
         );
       })}
+      {lightbox && <div className="ann-lightbox" onClick={() => setLightbox(null)}><img src={lightbox} alt="Full" /></div>}
     </div>
   );
 }
