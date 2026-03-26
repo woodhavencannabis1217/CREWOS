@@ -4231,6 +4231,12 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const [photoData, setPhotoData] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [taskTypeId, setTaskTypeId] = useState("");
+  const [vendor, setVendor] = useState("");
+  const [customVendor, setCustomVendor] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [endTime, setEndTime] = useState("");
   const photoRef = useRef(null);
   const [, setTick] = useState(0);
 
@@ -4259,16 +4265,22 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
 
   const postAnn = () => {
     if (!msg.trim()) { toast.show("Enter a message"); return; }
+    const finalVendor = vendor === "__custom__" ? customVendor.trim() : vendor;
     const ann = {
       id: uid(), author: user.name, message: msg.trim(),
       assignedTo: assignTo || null, durationMinutes: duration ? Number(duration) : null,
       photo: photoData || null,
       taskTypeId: taskTypeId || null, completedSteps: [],
+      vendor: finalVendor || null,
+      startDate: startDate || null, startTime: startTime || null,
+      endDate: endDate || null, endTime: endTime || null,
       createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
       completed: false, completedAt: null,
     };
     setAnnouncements(prev => [ann, ...prev]);
-    setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setTaskTypeId(""); setShowForm(false);
+    setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setTaskTypeId("");
+    setVendor(""); setCustomVendor(""); setStartDate(""); setStartTime(""); setEndDate(""); setEndTime("");
+    setShowForm(false);
     toast.show("Announcement posted!");
   };
 
@@ -4296,6 +4308,22 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const timeAgo = (iso) => { const d = (Date.now() - new Date(iso).getTime()) / 1000; if (d < 60) return "just now"; if (d < 3600) return Math.floor(d/60) + "m ago"; if (d < 86400) return Math.floor(d/3600) + "h ago"; return Math.floor(d/86400) + "d ago"; };
 
   const staffList = employees.filter(e => e.role !== "admin");
+
+  // Build vendor list from past announcements + pending deliveries
+  const knownVendors = (() => {
+    const set = new Set();
+    announcements.forEach(a => { if (a.vendor) set.add(a.vendor); });
+    try { const pd = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || []; pd.forEach(d => { if (d.company) set.add(d.company); }); } catch {}
+    return [...set].sort();
+  })();
+
+  const selectedTaskType = taskTypeId ? (taskTypes || []).find(t => t.id === taskTypeId) : null;
+
+  const fmtDate = (d) => {
+    if (!d) return "";
+    const [y, m, day] = d.split("-");
+    return `${Number(m)}/${Number(day)}/${y}`;
+  };
 
   const toggleStep = (annId, stepId) => {
     setAnnouncements(prev => prev.map(a => {
@@ -4326,10 +4354,50 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           </div>
           {taskTypes && taskTypes.length > 0 && (
             <div className="ann-form-row">
-              <select value={taskTypeId} onChange={e => setTaskTypeId(e.target.value)} style={{flex:1}}>
+              <select value={taskTypeId} onChange={e => { setTaskTypeId(e.target.value); if (!e.target.value) { setVendor(""); setCustomVendor(""); setStartDate(""); setStartTime(""); setEndDate(""); setEndTime(""); } }} style={{flex:1}}>
                 <option value="">Attach Task Type (optional)</option>
                 {taskTypes.map(tt => <option key={tt.id} value={tt.id}>{tt.name} ({tt.steps.length} steps)</option>)}
               </select>
+            </div>
+          )}
+          {selectedTaskType && (
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,padding:12,marginTop:2}}>
+              <div style={{fontSize:12,fontWeight:600,color:selectedTaskType.color,marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{width:10,height:10,borderRadius:"50%",background:selectedTaskType.color,display:"inline-block"}} />
+                {selectedTaskType.name} Details
+              </div>
+              <div className="ann-form-row" style={{marginBottom:8}}>
+                <select value={vendor} onChange={e => setVendor(e.target.value)} style={{flex:1}}>
+                  <option value="">Select Vendor / Brand</option>
+                  {knownVendors.map(v => <option key={v} value={v}>{v}</option>)}
+                  <option value="__custom__">+ Add New Vendor</option>
+                </select>
+              </div>
+              {vendor === "__custom__" && (
+                <div className="ann-form-row" style={{marginBottom:8}}>
+                  <input type="text" placeholder="Enter vendor / brand name" value={customVendor} onChange={e => setCustomVendor(e.target.value)} style={{flex:1}} />
+                </div>
+              )}
+              <div style={{fontSize:12,fontWeight:600,color:"var(--text)",marginBottom:6}}>Sale Period</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 12px 1fr 1fr",gap:8,alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>Start Date</div>
+                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>Start Time</div>
+                  <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
+                </div>
+                <div style={{textAlign:"center",color:"var(--muted2)",fontSize:14,paddingTop:14}}>-</div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>End Date</div>
+                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>End Time</div>
+                  <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
+                </div>
+              </div>
             </div>
           )}
           <div className="ann-form-row">
@@ -4377,8 +4445,17 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
               {a.completed && <span className="ann-tag completed">Done</span>}
               {a.accepted && !a.completed && <span className="ann-tag accepted">Accepted</span>}
               {(() => { const tt = a.taskTypeId && taskTypes ? taskTypes.find(t => t.id === a.taskTypeId) : null; return tt ? <span className="ann-tag" style={{background: tt.color + "18", color: tt.color, fontWeight: 600}}>{tt.name}</span> : null; })()}
+              {a.vendor && <span className="ann-tag" style={{background:"rgba(124,58,237,.08)",color:"var(--purple)",fontWeight:500}}>{a.vendor}</span>}
               <span className="ann-ago">{timeAgo(a.createdAt)}</span>
             </div>
+            {(a.startDate || a.endDate) && (
+              <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"var(--muted2)",marginTop:4,flexWrap:"wrap"}}>
+                <span style={{fontSize:12}}>&#128197;</span>
+                {a.startDate && <span>{fmtDate(a.startDate)}{a.startTime ? " " + a.startTime : ""}</span>}
+                {a.startDate && a.endDate && <span>&#8594;</span>}
+                {a.endDate && <span>{fmtDate(a.endDate)}{a.endTime ? " " + a.endTime : ""}</span>}
+              </div>
+            )}
             {(() => {
               if (!a.taskTypeId || !taskTypes) return null;
               const tt = taskTypes.find(t => t.id === a.taskTypeId);
