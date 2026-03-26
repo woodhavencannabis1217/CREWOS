@@ -4234,9 +4234,7 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const [vendor, setVendor] = useState("");
   const [customVendor, setCustomVendor] = useState("");
   const [startDate, setStartDate] = useState("");
-  const [startTime, setStartTime] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [endTime, setEndTime] = useState("");
   const photoRef = useRef(null);
   const [, setTick] = useState(0);
 
@@ -4272,14 +4270,13 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
       photo: photoData || null,
       taskTypeId: taskTypeId || null, completedSteps: [],
       vendor: finalVendor || null,
-      startDate: startDate || null, startTime: startTime || null,
-      endDate: endDate || null, endTime: endTime || null,
+      startDate: startDate || null, endDate: endDate || null,
       createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
       completed: false, completedAt: null,
     };
     setAnnouncements(prev => [ann, ...prev]);
     setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setTaskTypeId("");
-    setVendor(""); setCustomVendor(""); setStartDate(""); setStartTime(""); setEndDate(""); setEndTime("");
+    setVendor(""); setCustomVendor(""); setStartDate(""); setEndDate("");
     setShowForm(false);
     toast.show("Announcement posted!");
   };
@@ -4354,7 +4351,7 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           </div>
           {taskTypes && taskTypes.length > 0 && (
             <div className="ann-form-row">
-              <select value={taskTypeId} onChange={e => { setTaskTypeId(e.target.value); if (!e.target.value) { setVendor(""); setCustomVendor(""); setStartDate(""); setStartTime(""); setEndDate(""); setEndTime(""); } }} style={{flex:1}}>
+              <select value={taskTypeId} onChange={e => { setTaskTypeId(e.target.value); if (!e.target.value) { setVendor(""); setCustomVendor(""); setStartDate(""); setEndDate(""); } }} style={{flex:1}}>
                 <option value="">Attach Task Type (optional)</option>
                 {taskTypes.map(tt => <option key={tt.id} value={tt.id}>{tt.name} ({tt.steps.length} steps)</option>)}
               </select>
@@ -4379,23 +4376,15 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
                 </div>
               )}
               <div style={{fontSize:12,fontWeight:600,color:"var(--text)",marginBottom:6}}>Sale Period</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 12px 1fr 1fr",gap:8,alignItems:"center"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 12px 1fr",gap:8,alignItems:"center"}}>
                 <div>
                   <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>Start Date</div>
                   <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
-                </div>
-                <div>
-                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>Start Time</div>
-                  <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
                 </div>
                 <div style={{textAlign:"center",color:"var(--muted2)",fontSize:14,paddingTop:14}}>-</div>
                 <div>
                   <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>End Date</div>
                   <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
-                </div>
-                <div>
-                  <div style={{fontSize:10,color:"var(--muted2)",marginBottom:3}}>End Time</div>
-                  <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
                 </div>
               </div>
             </div>
@@ -4451,9 +4440,9 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
             {(a.startDate || a.endDate) && (
               <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"var(--muted2)",marginTop:4,flexWrap:"wrap"}}>
                 <span style={{fontSize:12}}>&#128197;</span>
-                {a.startDate && <span>{fmtDate(a.startDate)}{a.startTime ? " " + a.startTime : ""}</span>}
+                {a.startDate && <span>{fmtDate(a.startDate)}</span>}
                 {a.startDate && a.endDate && <span>&#8594;</span>}
-                {a.endDate && <span>{fmtDate(a.endDate)}{a.endTime ? " " + a.endTime : ""}</span>}
+                {a.endDate && <span>{fmtDate(a.endDate)}</span>}
               </div>
             )}
             {(() => {
