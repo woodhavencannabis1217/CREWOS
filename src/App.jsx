@@ -4307,12 +4307,22 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const staffList = employees.filter(e => e.role !== "admin");
 
   // Build vendor list from past announcements + pending deliveries
-  const knownVendors = (() => {
-    const set = new Set();
-    announcements.forEach(a => { if (a.vendor) set.add(a.vendor); });
-    try { const pd = JSON.parse(localStorage.getItem("crewos_pending_deliveries")) || []; pd.forEach(d => { if (d.company) set.add(d.company); }); } catch {}
-    return [...set].sort();
-  })();
+  const knownVendors = [
+    "1906","1937","5boro","Alchemy Pure","Alpine Agronomy","American Hash Maker","Anthem","Ayrloom",
+    "BIC","Binske","Bloom","Blotter","Bob Marley","Bonanza","Boukét","Breakfast Connections","BTQ",
+    "Cache","CAM","Camino","Canna Cantina","Canna Clinicals","Cannabals","Cheeba","Constellation","Crumbles",
+    "Dank","DIME","Doobies","Doobies Labs","EATON","Eaton Botanicals","ECS Therapeutics","Eddie Parker",
+    "Electraleaf","Elements","Fernway","FINCA","Find.","Flav","Florist Farms","Ghost","Good Green",
+    "Grassroots","Green Revolution","Grocery","Happy Hounds","Hashtag Honey","Heavy Hitters","Hepworth",
+    "Her Highness","Herb","HiCOLOR","High Ambitions","Honest Pharm Co","Hudson Cannabis","Hurley Grown",
+    "Jaunty","Jetty","JIVE","Kings & Queens","Kingsroad","KIVA","LayUp","Level","LivWell","Lost Farm",
+    "Lowell","Luci","matter.","MFNY","Mindbender","MINI MART","Moonlit","Munch Kins","Nanticoke",
+    "Naturel Xotics","NYCE","OCB","Offhours","Old Pal","ONGROK","Packs","PAX","PICC","Platinum Reserve",
+    "presidential moon Rock","Puff","Puffco","Raw","Rolling Green","Rove","Ruby Farm","Runtz","Rythm",
+    "Select","Skyworld","Sluggers","Smack","Smart Buds","SmartBud","Snoop Dogg","State of Mind",
+    "Stone Road","Strain Gang","Sushi Hash","The Botanist","To The Moon","Toast","Torrwood","Tune",
+    "Tyson 2.0","Umamii","WaaHoo","Wana","WormHole","WYLD","ZigZag"
+  ];
 
   const selectedTaskType = taskTypeId ? (taskTypes || []).find(t => t.id === taskTypeId) : null;
 
