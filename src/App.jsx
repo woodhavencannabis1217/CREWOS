@@ -2472,8 +2472,8 @@ function NfcClockPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [employees, setEmployees] = useState([]);
 
-  // Load clock status for remembered employee (skip PIN)
-  const loadClockStatus = async (emp) => {
+  // Load clock status for remembered employee and AUTO-CLOCK immediately
+  const loadClockStatus = async (emp, autoClockNow = false) => {
     setPhase("loading");
     try {
       const data = await firebaseGet(fbUrl, "crewos_data");
@@ -2492,17 +2492,33 @@ function NfcClockPage() {
       const logs = data.clockLogs || [];
       const myLogs = logs.filter(l => l.employeeId === current.id);
       const lastLog = myLogs[myLogs.length - 1];
-      setIsClockedIn(lastLog && lastLog.type === "in");
+      const currentlyClockedIn = lastLog && lastLog.type === "in";
+      setIsClockedIn(currentlyClockedIn);
+
+      // Auto-clock: if remembered employee, immediately clock in/out
+      if (autoClockNow) {
+        const type = currentlyClockedIn ? "out" : "in";
+        setPhase("processing");
+        const now = new Date();
+        const newLog = { employeeId: current.id, type, time: now.toISOString(), source: "nfc", locationId: locId };
+        logs.push(newLog);
+        await firebaseSet(fbUrl, "crewos_data/clockLogs", logs);
+        setClockType(type);
+        setClockTime(now);
+        setPhase("done");
+        return;
+      }
+
       setPhase("action");
     } catch (err) {
       setPhase("error"); setErrorMsg("Connection failed: " + err.message);
     }
   };
 
-  // Validate params & auto-load remembered employee
+  // Validate params & auto-load remembered employee — auto-clock immediately!
   useEffect(() => {
     if (!fbUrl) { setPhase("error"); setErrorMsg("Invalid NFC tag — no sync URL found. Please contact your admin."); return; }
-    if (remembered) loadClockStatus(remembered);
+    if (remembered) loadClockStatus(remembered, true); // auto-clock on tap!
   }, []);
 
   const addPin = (d) => {
@@ -2528,12 +2544,21 @@ function NfcClockPage() {
           // Remember employee on this device
           localStorage.setItem("crewos_nfc_employee", JSON.stringify({ id: emp.id, name: emp.name }));
           setEmployee(emp);
-          // Determine if currently clocked in
+          setEmployees(emps);
+          // Auto-clock immediately after first PIN entry too
           const logs = data.clockLogs || [];
           const myLogs = logs.filter(l => l.employeeId === emp.id);
           const lastLog = myLogs[myLogs.length - 1];
-          setIsClockedIn(lastLog && lastLog.type === "in");
-          setPhase("action");
+          const currentlyClockedIn = lastLog && lastLog.type === "in";
+          const type = currentlyClockedIn ? "out" : "in";
+          setPhase("processing");
+          const now = new Date();
+          const newLog = { employeeId: emp.id, type, time: now.toISOString(), source: "nfc", locationId: locId };
+          logs.push(newLog);
+          await firebaseSet(fbUrl, "crewos_data/clockLogs", logs);
+          setClockType(type);
+          setClockTime(now);
+          setPhase("done");
         } catch (err) {
           setPhase("error"); setErrorMsg("Connection failed: " + err.message);
         }
@@ -2583,7 +2608,7 @@ function NfcClockPage() {
           <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
           <div className="nfc-loading">
             <div className="nfc-spinner" />
-            <div style={{fontSize:13,color:"var(--muted2)"}}>{phase === "loading" ? "Verifying PIN..." : "Recording clock event..."}</div>
+            <div style={{fontSize:13,color:"var(--muted2)"}}>{phase === "loading" ? (remembered ? "Clocking you in..." : "Verifying PIN...") : "Recording clock event..."}</div>
           </div>
         </div>
       </div>
@@ -3465,10 +3490,30 @@ function AdminSettings({ settings, setSettings }) {
 
       <div className="sec-head">NFC Clock-In</div>
       <div className="card">
-        <div className="setting-row" style={{borderBottom:"none"}}>
-          <div><div className="setting-label">Enable NFC tap to clock in/out</div><div className="setting-sub">Employees tap their phone on an NFC sticker to clock in or out (requires Android + Chrome)</div></div>
+        <div className="setting-row">
+          <div><div className="setting-label">Enable NFC banner on My Hours</div><div className="setting-sub">Show NFC status on employee hours page (Android Chrome only)</div></div>
           <div className={"toggle"+(settings.nfcEnabled?" on":"")} onClick={() => setSettings(s=>({...s,nfcEnabled:!s.nfcEnabled}))}><div className="toggle-knob" /></div>
         </div>
+        {settings.firebaseUrl && (
+          <div className="setting-row" style={{flexDirection:"column",alignItems:"stretch",gap:10,borderBottom:"none"}}>
+            <div>
+              <div className="setting-label">NFC Sticker URL</div>
+              <div className="setting-sub">Write this URL to your NFC sticker using the NFC Tools app. Employees tap the sticker → auto clock in/out. Works on iPhone &amp; Android.</div>
+            </div>
+            <div style={{background:"var(--bg4)",padding:"10px 14px",borderRadius:10,fontFamily:"var(--mono)",fontSize:11,wordBreak:"break-all",color:"var(--text)",lineHeight:1.6,userSelect:"all",cursor:"text"}}>
+              {window.location.origin + window.location.pathname + "#/nfc-clock?fb=" + encodeURIComponent(settings.firebaseUrl)}
+            </div>
+            <button className="btn small" onClick={() => {
+              navigator.clipboard.writeText(window.location.origin + window.location.pathname + "#/nfc-clock?fb=" + encodeURIComponent(settings.firebaseUrl));
+              toast.show("NFC URL copied!");
+            }}>📋 Copy URL</button>
+          </div>
+        )}
+        {!settings.firebaseUrl && (
+          <div className="setting-row" style={{borderBottom:"none"}}>
+            <div style={{fontSize:12,color:"var(--amber)"}}>⚠ Set up Firebase Cloud Sync first — NFC clock requires it to work across devices.</div>
+          </div>
+        )}
       </div>
 
       <div className="sec-head">Cash Drawer</div>
@@ -4638,7 +4683,18 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const [user, setUser] = useState(null);
+  const [user, setUserRaw] = useState(null);
+  const [nfcAutoClockPending, setNfcAutoClockPending] = useState(false);
+  const [nfcClockResult, setNfcClockResult] = useState(null); // { type:"in"|"out", name }
+
+  // Wrap setUser to persist session for NFC tap-to-clock
+  const setUser = (emp) => {
+    setUserRaw(emp);
+    if (emp && emp.role !== "admin") {
+      localStorage.setItem("crewos_nfc_session", JSON.stringify({ id: emp.id, pin: emp.pin }));
+    }
+  };
+
   const [adminTab, setAdminTab] = useState("schedule");
   const [empTab, setEmpTab] = useState("hours");
   const toast = useToast();
