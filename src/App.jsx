@@ -3477,10 +3477,10 @@ function AdminSettings({ settings, setSettings }) {
               <div className="setting-sub">Write this URL to your NFC sticker using the NFC Tools app. Employees tap the sticker → auto clock in/out. Works on iPhone &amp; Android.</div>
             </div>
             <div style={{background:"var(--bg4)",padding:"10px 14px",borderRadius:10,fontFamily:"var(--mono)",fontSize:11,wordBreak:"break-all",color:"var(--text)",lineHeight:1.6,userSelect:"all",cursor:"text"}}>
-              {window.location.origin + window.location.pathname + "#/nfc-clock?fb=" + encodeURIComponent(settings.firebaseUrl)}
+              {window.location.origin + window.location.pathname.replace(/\/$/, "") + "/clock.html?fb=" + encodeURIComponent(settings.firebaseUrl)}
             </div>
             <button className="btn small" onClick={() => {
-              navigator.clipboard.writeText(window.location.origin + window.location.pathname + "#/nfc-clock?fb=" + encodeURIComponent(settings.firebaseUrl));
+              navigator.clipboard.writeText(window.location.origin + window.location.pathname.replace(/\/$/, "") + "/clock.html?fb=" + encodeURIComponent(settings.firebaseUrl));
               toast.show("NFC URL copied!");
             }}>📋 Copy URL</button>
           </div>
