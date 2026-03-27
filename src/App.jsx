@@ -3544,6 +3544,14 @@ function AdminSettings({ settings, setSettings }) {
         </>}
       </div>
 
+      <div className="sec-head">Announcements & Tasks</div>
+      <div className="card">
+        <div className="setting-row" style={{borderBottom:"none"}}>
+          <div><div className="setting-label">Display duration (hours)</div><div className="setting-sub">How long announcements stay in the main panel before moving to staff tasks</div></div>
+          <input type="number" min={1} max={720} value={settings.annDisplayHours || 24} onChange={e => setSettings(s=>({...s,annDisplayHours:parseInt(e.target.value)||24}))} style={{width:70}} />
+        </div>
+      </div>
+
       <div className="sec-head">Clock-In Rules</div>
       <div className="card">
         <div className="setting-row">
@@ -3829,7 +3837,7 @@ function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, on
 }
 
 // ─── EMPLOYEE: MY TASKS ──────────────────────────────────────────────────────
-function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
+function EmpTasks({ employee, tasks, schedule, firebaseUrl, announcements, settings }) {
   const [activeSection, setActiveSection] = useState("daily");
   const [taskStates, setTaskStates] = useState({});
   const [completeModal, setCompleteModal] = useState(null);
@@ -4193,6 +4201,35 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
       {/* Hidden file input for photo uploads */}
       <input type="file" ref={fileInputRef} accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhotoUpload} />
 
+      {/* Assigned Tasks from Announcements */}
+      {(() => {
+        const annDisplayMs = ((settings && settings.annDisplayHours) || 24) * 3600000;
+        const nowMs = Date.now();
+        const movedAnns = (announcements || []).filter(a =>
+          a.assignedTo === employee.name && !a.completed && (nowMs - new Date(a.createdAt).getTime()) >= annDisplayMs
+        );
+        if (movedAnns.length === 0) return null;
+        const fmtDateShort = (d) => { if (!d) return ""; const [y,m,day] = d.split("-"); return Number(m)+"/"+Number(day)+"/"+y; };
+        return (
+          <div style={{marginBottom:18}}>
+            <div style={{fontSize:14,fontWeight:700,color:"var(--purple)",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>&#128203;</span> Assigned Tasks
+            </div>
+            {movedAnns.map(a => (
+              <div key={a.id} style={{padding:14,background:"rgba(124,58,237,.04)",border:"1px solid rgba(124,58,237,.2)",borderRadius:12,marginBottom:10}}>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--text)",marginBottom:6}}>{a.message}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,fontSize:11,color:"var(--muted2)",alignItems:"center"}}>
+                  {a.vendor && <span style={{background:"rgba(124,58,237,.08)",color:"var(--purple)",padding:"2px 8px",borderRadius:6,fontWeight:500}}>{a.vendor}</span>}
+                  {(a.startDate || a.endDate) && <span>{a.startDate && fmtDateShort(a.startDate)}{a.startDate && a.endDate && " - "}{a.endDate && fmtDateShort(a.endDate)}</span>}
+                  {a.durationMinutes && <span>{a.durationMinutes}m timer</span>}
+                  <span>from {a.author}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* Section Tabs — scrollable if many deliveries */}
       <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:16,WebkitOverflowScrolling:"touch"}}>
         <div className={"period-tab" + (activeSection === "daily" ? " on" : "")}
@@ -4367,7 +4404,7 @@ function EmpTasks({ employee, tasks, schedule, firebaseUrl }) {
 
 // ─── MAIN APP ────────────────────────────────────────────────────────────────
 // ─── ANNOUNCEMENTS PANEL (always visible) ─────────────────────────────────
-function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, toast, taskTypes, tasks }) {
+function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, toast, taskTypes, tasks, settings }) {
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState("");
   const [assignTo, setAssignTo] = useState("");
@@ -4379,6 +4416,9 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   const [customVendor, setCustomVendor] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [discountPct, setDiscountPct] = useState("");
+  const [creditInputId, setCreditInputId] = useState(null);
+  const [creditInputVal, setCreditInputVal] = useState("");
   const photoRef = useRef(null);
   const [, setTick] = useState(0);
 
@@ -4391,9 +4431,12 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
   }, [announcements]);
 
   const now = Date.now();
+  const annDisplayMs = ((settings && settings.annDisplayHours) || 24) * 3600000;
   const visible = announcements.filter(a => {
-    if (!a.completed) return true;
-    return (now - new Date(a.completedAt).getTime()) < 3600000;
+    const age = now - new Date(a.createdAt).getTime();
+    if (a.completed) return (now - new Date(a.completedAt).getTime()) < 3600000;
+    if (age >= annDisplayMs) return false;
+    return true;
   });
 
   const handlePhoto = (e) => {
@@ -4415,12 +4458,14 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
       taskTypeId: taskTypeId || null, completedSteps: [],
       vendor: finalVendor || null,
       startDate: startDate || null, endDate: endDate || null,
+      discountPct: discountPct ? Number(discountPct) : null,
+      creditAmount: null, creditSettled: false,
       createdAt: new Date().toISOString(), accepted: false, acceptedAt: null,
       completed: false, completedAt: null,
     };
     setAnnouncements(prev => [ann, ...prev]);
     setMsg(""); setAssignTo(""); setDuration(""); setPhotoData(null); setTaskTypeId("");
-    setVendor(""); setCustomVendor(""); setStartDate(""); setEndDate("");
+    setVendor(""); setCustomVendor(""); setStartDate(""); setEndDate(""); setDiscountPct("");
     setShowForm(false);
     toast.show("Announcement posted!");
   };
@@ -4541,6 +4586,12 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
                   <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{width:"100%",fontSize:12,padding:"6px 8px"}} />
                 </div>
               </div>
+              {vendor && startDate && endDate && (
+                <div style={{marginTop:8}}>
+                  <div style={{fontSize:12,fontWeight:600,color:"var(--text)",marginBottom:6}}>Discount %</div>
+                  <input type="number" min="0" max="100" placeholder="e.g. 20" value={discountPct} onChange={e => setDiscountPct(e.target.value)} style={{width:90,fontSize:12,padding:"6px 8px"}} />
+                </div>
+              )}
             </div>
           )}
           <div className="ann-form-row">
@@ -4561,6 +4612,55 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           </div>
         </div>
       )}
+      {/* Promo Credits Due */}
+      {(user.role === "admin" || user.name === "Admin") && (() => {
+        const today = new Date().toISOString().split("T")[0];
+        const expiredPromos = announcements.filter(a => a.vendor && a.endDate && a.discountPct && a.endDate < today);
+        if (expiredPromos.length === 0) return null;
+        const unsettled = expiredPromos.filter(a => !a.creditSettled);
+        const settled = expiredPromos.filter(a => a.creditSettled);
+        return (
+          <div style={{marginBottom:14,padding:14,background:"rgba(234,179,8,.06)",border:"1px solid rgba(234,179,8,.25)",borderRadius:12}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#b45309",marginBottom:10}}>Promo Credits Due</div>
+            {unsettled.map(a => (
+              <div key={a.id} style={{padding:10,background:"var(--surface)",borderRadius:8,border:"1px solid var(--border)",marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
+                </div>
+                {creditInputId === a.id ? (
+                  <div style={{display:"flex",gap:6,marginTop:8,alignItems:"center"}}>
+                    <span style={{fontSize:12}}>$</span>
+                    <input type="number" min="0" step="0.01" placeholder="Credit amount" value={creditInputVal} onChange={e => setCreditInputVal(e.target.value)} style={{width:110,fontSize:12,padding:"5px 8px"}} />
+                    <button className="btn primary small" style={{fontSize:11}} onClick={() => {
+                      const amt = parseFloat(creditInputVal);
+                      if (!amt || amt <= 0) return;
+                      setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, creditAmount: amt, creditSettled: true} : x));
+                      setCreditInputId(null); setCreditInputVal("");
+                    }}>Save</button>
+                    <button className="btn small" style={{fontSize:11}} onClick={() => { setCreditInputId(null); setCreditInputVal(""); }}>Cancel</button>
+                  </div>
+                ) : (
+                  <button className="btn small" style={{marginTop:8,fontSize:11}} onClick={() => { setCreditInputId(a.id); setCreditInputVal(""); }}>Enter Credit Amount</button>
+                )}
+              </div>
+            ))}
+            {settled.map(a => (
+              <div key={a.id} style={{padding:10,background:"rgba(22,163,74,.04)",borderRadius:8,border:"1px solid rgba(22,163,74,.2)",marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
+                  <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
+                  <span style={{fontSize:11,fontWeight:600,color:"var(--green)"}}>${a.creditAmount}</span>
+                  <span style={{fontSize:10,background:"rgba(22,163,74,.1)",color:"var(--green)",padding:"2px 8px",borderRadius:6,fontWeight:600}}>Settled</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
       {visible.length === 0 && !showForm && <div className="ann-empty">No announcements</div>}
       {visible.map(a => {
         const isMyAnn = a.author === user.name;
@@ -4574,7 +4674,7 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           <div key={a.id} className={"ann-item" + (a.completed ? " done" : "") + (a.accepted && isTask && !a.completed ? " active" : "") + (isTask && !a.accepted && !a.completed ? " pending" : "")}>
             <div className="ann-item-top">
               <div className="ann-item-msg">{a.message}</div>
-              {isMyAnn && !a.completed && <button className="ann-del" onClick={() => deleteAnn(a.id)}>&times;</button>}
+              {(user.role === "admin" || user.name === "Admin" || (isMyAnn && !a.completed)) && <button className="ann-del" onClick={() => deleteAnn(a.id)}>&times;</button>}
             </div>
             {a.photo && (
               <div className="ann-photo-attached">
@@ -4587,6 +4687,8 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
               {a.durationMinutes && <span className="ann-tag time">{a.durationMinutes}m</span>}
               {a.completed && <span className="ann-tag completed">Done</span>}
               {a.accepted && !a.completed && <span className="ann-tag accepted">Accepted</span>}
+              {a.creditSettled && <span className="ann-tag" style={{background:"rgba(22,163,74,.1)",color:"var(--green)",fontWeight:600}}>Settled</span>}
+              {a.discountPct && <span className="ann-tag" style={{background:"rgba(234,179,8,.1)",color:"#b45309",fontWeight:500}}>{a.discountPct}% off</span>}
               {(() => { const tt = a.taskTypeId && taskTypes ? taskTypes.find(t => t.id === a.taskTypeId) : null; return tt ? <span className="ann-tag" style={{background: tt.color + "18", color: tt.color, fontWeight: 600}}>{tt.name}</span> : null; })()}
               {a.vendor && <span className="ann-tag" style={{background:"rgba(124,58,237,.08)",color:"var(--purple)",fontWeight:500}}>{a.vendor}</span>}
               <span className="ann-ago">{timeAgo(a.createdAt)}</span>
@@ -4724,7 +4826,7 @@ export default function App() {
   });
   const [settings, setSettings] = useState(() => {
     try {
-      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", nfcEnabled:false, firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" };
+      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", nfcEnabled:false, firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com", annDisplayHours:24 };
       const saved = JSON.parse(localStorage.getItem("crewos_settings")) || defaults;
       // Allow Firebase URL to be set via URL parameter for easy setup on new devices
       try {
@@ -5197,7 +5299,7 @@ export default function App() {
           ))}
         </div>
 
-        <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} taskTypes={taskTypes} tasks={tasks} />
+        <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} taskTypes={taskTypes} tasks={tasks} settings={settings} />
 
         <div className="body">
           {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
@@ -5211,7 +5313,7 @@ export default function App() {
 
           {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
           {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} nfcEnabled={settings.nfcEnabled || false} />}
-          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} />}
+          {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} announcements={announcements} settings={settings} />}
         </div>
       </div>
 
