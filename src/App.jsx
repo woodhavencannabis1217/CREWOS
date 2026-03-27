@@ -2472,8 +2472,8 @@ function NfcClockPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [employees, setEmployees] = useState([]);
 
-  // Load clock status for remembered employee and AUTO-CLOCK immediately
-  const loadClockStatus = async (emp, autoClockNow = false) => {
+  // Load clock status for remembered employee (skip PIN, show action buttons)
+  const loadClockStatus = async (emp) => {
     setPhase("loading");
     try {
       const data = await firebaseGet(fbUrl, "crewos_data");
@@ -2492,33 +2492,17 @@ function NfcClockPage() {
       const logs = data.clockLogs || [];
       const myLogs = logs.filter(l => l.employeeId === current.id);
       const lastLog = myLogs[myLogs.length - 1];
-      const currentlyClockedIn = lastLog && lastLog.type === "in";
-      setIsClockedIn(currentlyClockedIn);
-
-      // Auto-clock: if remembered employee, immediately clock in/out
-      if (autoClockNow) {
-        const type = currentlyClockedIn ? "out" : "in";
-        setPhase("processing");
-        const now = new Date();
-        const newLog = { employeeId: current.id, type, time: now.toISOString(), source: "nfc", locationId: locId };
-        logs.push(newLog);
-        await firebaseSet(fbUrl, "crewos_data/clockLogs", logs);
-        setClockType(type);
-        setClockTime(now);
-        setPhase("done");
-        return;
-      }
-
+      setIsClockedIn(lastLog && lastLog.type === "in");
       setPhase("action");
     } catch (err) {
       setPhase("error"); setErrorMsg("Connection failed: " + err.message);
     }
   };
 
-  // Validate params & auto-load remembered employee — auto-clock immediately!
+  // Validate params & load remembered employee
   useEffect(() => {
     if (!fbUrl) { setPhase("error"); setErrorMsg("Invalid NFC tag — no sync URL found. Please contact your admin."); return; }
-    if (remembered) loadClockStatus(remembered, true); // auto-clock on tap!
+    if (remembered) loadClockStatus(remembered);
   }, []);
 
   const addPin = (d) => {
@@ -2545,20 +2529,12 @@ function NfcClockPage() {
           localStorage.setItem("crewos_nfc_employee", JSON.stringify({ id: emp.id, name: emp.name }));
           setEmployee(emp);
           setEmployees(emps);
-          // Auto-clock immediately after first PIN entry too
+          // Show clock in/out buttons
           const logs = data.clockLogs || [];
           const myLogs = logs.filter(l => l.employeeId === emp.id);
           const lastLog = myLogs[myLogs.length - 1];
-          const currentlyClockedIn = lastLog && lastLog.type === "in";
-          const type = currentlyClockedIn ? "out" : "in";
-          setPhase("processing");
-          const now = new Date();
-          const newLog = { employeeId: emp.id, type, time: now.toISOString(), source: "nfc", locationId: locId };
-          logs.push(newLog);
-          await firebaseSet(fbUrl, "crewos_data/clockLogs", logs);
-          setClockType(type);
-          setClockTime(now);
-          setPhase("done");
+          setIsClockedIn(lastLog && lastLog.type === "in");
+          setPhase("action");
         } catch (err) {
           setPhase("error"); setErrorMsg("Connection failed: " + err.message);
         }
@@ -2608,7 +2584,7 @@ function NfcClockPage() {
           <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
           <div className="nfc-loading">
             <div className="nfc-spinner" />
-            <div style={{fontSize:13,color:"var(--muted2)"}}>{phase === "loading" ? (remembered ? "Clocking you in..." : "Verifying PIN...") : "Recording clock event..."}</div>
+            <div style={{fontSize:13,color:"var(--muted2)"}}>{phase === "loading" ? (remembered ? "Loading..." : "Verifying PIN...") : "Recording clock event..."}</div>
           </div>
         </div>
       </div>
