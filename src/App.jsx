@@ -385,6 +385,7 @@ input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
 .toast.error{border-left:3px solid var(--red)}
 .toast.warning{border-left:3px solid var(--amber)}
 @keyframes toastIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
 
 /* RESPONSIVE */
 @media(max-width:640px){
@@ -2096,7 +2097,20 @@ function AdminTasks({ tasks, setTasks, taskTypes, setTaskTypes, toast }) {
       {/* ═══ TASK STATUS TAB ═══ */}
       {activeTab === "status" && (
         <div>
-          <div style={{fontSize:12,color:"var(--muted2)",marginBottom:14}}>View employee task completion status and uploaded photos.</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontSize:12,color:"var(--muted2)"}}>View employee task completion status and uploaded photos.</div>
+            {taskLogs.length > 0 && (
+              <button className="btn small" style={{fontSize:11,color:"var(--red)",borderColor:"rgba(220,38,38,.2)"}} onClick={() => {
+                if (confirm("Clear all completed task entries?")) {
+                  setTaskLogs([]);
+                  localStorage.setItem("crewos_task_logs", "[]");
+                  setTaskPhotos({});
+                  localStorage.setItem("crewos_task_photos", "{}");
+                  toast.show("All task entries cleared", "warning");
+                }
+              }}>Clear All</button>
+            )}
+          </div>
           {taskLogs.length === 0 ? (
             <div style={{color:"var(--muted2)",fontSize:13,padding:"40px 0",textAlign:"center"}}>
               No task activity yet today. Logs appear when employees start and complete tasks.
@@ -2135,6 +2149,27 @@ function AdminTasks({ tasks, setTasks, taskTypes, setTaskTypes, toast }) {
                             <div className="task-name" style={{fontSize:13}}>{log.taskTitle}</div>
                             {log.deliveryVendor && <span className="task-badge" style={{background:"rgba(124,58,237,.08)",color:"var(--purple)",fontSize:10}}>{log.deliveryVendor}</span>}
                             <span style={{fontSize:10,color:"var(--muted2)",marginLeft:"auto"}}>{new Date(log.timestamp).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>
+                            <button onClick={() => {
+                              const updated = taskLogs.filter((_, idx) => idx !== taskLogs.indexOf(log));
+                              setTaskLogs(updated);
+                              localStorage.setItem("crewos_task_logs", JSON.stringify(updated));
+                              // Also remove associated photos
+                              const photoKey = log.taskKey || log.taskId;
+                              if (photoKey && taskPhotos[photoKey]) {
+                                const updatedPhotos = { ...taskPhotos };
+                                delete updatedPhotos[photoKey];
+                                setTaskPhotos(updatedPhotos);
+                                localStorage.setItem("crewos_task_photos", JSON.stringify(updatedPhotos));
+                              }
+                              toast.show("Task entry removed", "warning");
+                            }} style={{
+                              marginLeft:8,background:"none",border:"none",cursor:"pointer",
+                              color:"var(--muted2)",fontSize:16,padding:"2px 6px",borderRadius:6,
+                              lineHeight:1,transition:"color .15s"
+                            }}
+                            onMouseEnter={e => e.target.style.color="var(--red)"}
+                            onMouseLeave={e => e.target.style.color="var(--muted2)"}
+                            title="Remove this entry">&times;</button>
                           </div>
                           {photos.length > 0 && (
                             <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
@@ -3428,6 +3463,14 @@ function AdminSettings({ settings, setSettings }) {
         </>}
       </div>
 
+      <div className="sec-head">NFC Clock-In</div>
+      <div className="card">
+        <div className="setting-row" style={{borderBottom:"none"}}>
+          <div><div className="setting-label">Enable NFC tap to clock in/out</div><div className="setting-sub">Employees tap their phone on an NFC sticker to clock in or out (requires Android + Chrome)</div></div>
+          <div className={"toggle"+(settings.nfcEnabled?" on":"")} onClick={() => setSettings(s=>({...s,nfcEnabled:!s.nfcEnabled}))}><div className="toggle-knob" /></div>
+        </div>
+      </div>
+
       <div className="sec-head">Cash Drawer</div>
       <div className="card">
         <div className="setting-row" style={{borderBottom:"none"}}>
@@ -3645,13 +3688,93 @@ function EmpSchedule({ employee, schedule }) {
 }
 
 // ─── EMPLOYEE: MY HOURS ──────────────────────────────────────────────────────
-function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, onDismissNote, isClockedIn, geoBlocked, geoBlockMsg, geoChecking, onDismissGeo }) {
+function EmpHours({ employee, clockLogs, onClockIn, onClockOut, handoffNotes, onDismissNote, isClockedIn, geoBlocked, geoBlockMsg, geoChecking, onDismissGeo, nfcEnabled }) {
   const myLogs = clockLogs.filter(l => l.employeeId === employee.id);
   const total = calcHours(myLogs);
+
+  // NFC tap-to-clock
+  const [nfcStatus, setNfcStatus] = useState("idle"); // idle | listening | unsupported | error
+  const [nfcFlash, setNfcFlash] = useState(null); // "in" | "out" | null
+  const nfcReaderRef = useRef(null);
+
+  useEffect(() => {
+    if (!nfcEnabled) return;
+    if (!("NDEFReader" in window)) { setNfcStatus("unsupported"); return; }
+    let aborted = false;
+    const startNfc = async () => {
+      try {
+        const reader = new window.NDEFReader();
+        nfcReaderRef.current = reader;
+        await reader.scan();
+        setNfcStatus("listening");
+        reader.onreading = () => {
+          if (aborted) return;
+          // Toggle clock in/out on NFC tap
+          if (!isClockedIn) {
+            setNfcFlash("in");
+            onClockIn();
+          } else {
+            setNfcFlash("out");
+            onClockOut();
+          }
+          setTimeout(() => setNfcFlash(null), 2000);
+        };
+        reader.onreadingerror = () => { setNfcStatus("error"); };
+      } catch (e) {
+        if (!aborted) setNfcStatus("error");
+      }
+    };
+    startNfc();
+    return () => { aborted = true; };
+  }, [nfcEnabled, isClockedIn]);
 
   return (
     <div>
       <HandoffBanner notes={handoffNotes} onDismiss={onDismissNote} />
+
+      {/* NFC tap-to-clock banner */}
+      {nfcEnabled && (
+        <div style={{
+          background: nfcFlash === "in" ? "rgba(22,163,74,.12)" : nfcFlash === "out" ? "rgba(220,38,38,.08)" : "rgba(37,99,235,.05)",
+          border: "1px solid " + (nfcFlash === "in" ? "rgba(22,163,74,.3)" : nfcFlash === "out" ? "rgba(220,38,38,.2)" : "rgba(37,99,235,.15)"),
+          borderRadius: 14, padding: "14px 18px", marginBottom: 16,
+          display: "flex", alignItems: "center", gap: 14,
+          transition: "all .3s ease"
+        }}>
+          <div style={{fontSize: 28, lineHeight: 1}}>📱</div>
+          <div style={{flex:1}}>
+            {nfcFlash === "in" && <div style={{fontSize:14,fontWeight:700,color:"var(--green)"}}>✓ Clocked In via NFC!</div>}
+            {nfcFlash === "out" && <div style={{fontSize:14,fontWeight:700,color:"var(--red)"}}>✓ Clocked Out via NFC!</div>}
+            {!nfcFlash && nfcStatus === "listening" && (
+              <>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--text)"}}>NFC Clock-In Ready</div>
+                <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>Tap your phone on the NFC sticker to {isClockedIn ? "clock out" : "clock in"}</div>
+              </>
+            )}
+            {!nfcFlash && nfcStatus === "unsupported" && (
+              <>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--amber)"}}>NFC Not Supported</div>
+                <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>Your browser doesn't support NFC. Use Chrome on Android.</div>
+              </>
+            )}
+            {!nfcFlash && nfcStatus === "error" && (
+              <>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--red)"}}>NFC Error</div>
+                <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>Could not start NFC. Make sure NFC is enabled in your phone settings.</div>
+              </>
+            )}
+            {!nfcFlash && nfcStatus === "idle" && (
+              <>
+                <div style={{fontSize:13,fontWeight:600,color:"var(--muted)"}}>NFC Initializing...</div>
+              </>
+            )}
+          </div>
+          {nfcStatus === "listening" && !nfcFlash && (
+            <div style={{width:10,height:10,borderRadius:"50%",background:"var(--green)",boxShadow:"0 0 6px rgba(22,163,74,.5)",animation:"pulse 2s infinite"}} />
+          )}
+        </div>
+      )}
+
       {geoBlocked && (
         <div style={{background:"rgba(220,38,38,.04)",border:"1px solid rgba(220,38,38,.2)",borderRadius:14,padding:18,marginBottom:18,textAlign:"center"}}>
           <div style={{fontSize:32,marginBottom:8}}>&#128205;</div>
@@ -4569,7 +4692,7 @@ export default function App() {
   });
   const [settings, setSettings] = useState(() => {
     try {
-      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" };
+      const defaults = { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", nfcEnabled:false, firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" };
       const saved = JSON.parse(localStorage.getItem("crewos_settings")) || defaults;
       // Allow Firebase URL to be set via URL parameter for easy setup on new devices
       try {
@@ -4581,7 +4704,7 @@ export default function App() {
         }
       } catch {}
       return saved;
-    } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" }; }
+    } catch { return { lateThreshold:5, earlyThreshold:5, notifyMismatch:true, notifyLate:true, notifyVendor:true, geoEnabled:false, geoLat:null, geoLng:null, geoRadius:150, geoAddress:"", geoDisplay:"", nfcEnabled:false, firebaseUrl:"https://crewos-og-default-rtdb.firebaseio.com" }; }
   });
   const [drawerLogs, setDrawerLogs] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_drawer"))||[]; } catch { return []; } });
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
@@ -5055,7 +5178,7 @@ export default function App() {
           {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} />}
 
           {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
-          {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} />}
+          {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} nfcEnabled={settings.nfcEnabled || false} />}
           {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} />}
         </div>
       </div>
