@@ -711,17 +711,17 @@ function HandoffBanner({ notes, onDismiss }) {
 function AdminEmployees({ employees, setEmployees, toast }) {
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: "", pin: "", role: "A", rate: 15 });
+  const [form, setForm] = useState({ name: "", pin: "", phone: "", role: "A", rate: 15 });
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
   const openNew = () => {
-    setForm({ name: "", pin: "", role: "A", rate: 15 });
+    setForm({ name: "", pin: "", phone: "", role: "A", rate: 15 });
     setEditId(null);
     setShowModal(true);
   };
 
   const openEdit = (emp) => {
-    setForm({ name: emp.name, pin: emp.pin, role: emp.role, rate: emp.rate || 15 });
+    setForm({ name: emp.name, pin: emp.pin, phone: emp.phone || "", role: emp.role, rate: emp.rate || 15 });
     setEditId(emp.id);
     setShowModal(true);
   };
@@ -769,7 +769,7 @@ function AdminEmployees({ employees, setEmployees, toast }) {
           </div>
           <div className="emp-info">
             <div className="emp-name">{emp.name}</div>
-            <div className="emp-detail">Role {emp.role} &nbsp;·&nbsp; PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr</div>
+            <div className="emp-detail">Role {emp.role} &nbsp;·&nbsp; PIN: {emp.pin} &nbsp;·&nbsp; ${emp.rate || 0}/hr{emp.phone ? <span> &nbsp;·&nbsp; {emp.phone}</span> : ""}</div>
           </div>
           <div className="emp-actions">
             <button className="btn small" onClick={() => openEdit(emp)}>Edit</button>
@@ -788,6 +788,10 @@ function AdminEmployees({ employees, setEmployees, toast }) {
             <div className="form-group">
               <label>4-Digit PIN</label>
               <input type="text" maxLength={4} value={form.pin} onChange={e => setForm(f => ({...f, pin: e.target.value.replace(/\D/g,"").slice(0,4)}))} placeholder="e.g. 1234" style={{fontFamily:"var(--mono)",letterSpacing:"4px",fontSize:18,textAlign:"center"}} />
+            </div>
+            <div className="form-group">
+              <label>Phone Number (for SMS reminders)</label>
+              <input type="tel" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value.replace(/[^\d+\-() ]/g,"")}))} placeholder="e.g. (917) 555-1234" />
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <div className="form-group">
