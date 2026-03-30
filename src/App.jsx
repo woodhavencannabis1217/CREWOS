@@ -3175,13 +3175,17 @@ function InvoiceVerifier({ toast }) {
 }
 
 // ─── ADMIN: PROMOS & VENDOR CREDITS ──────────────────────────────────────────
-function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCreditSubmissions, vendorReps, setVendorReps, toast }) {
-  const [activeView, setActiveView] = useState("promos"); // "promos" | "credits" | "reps"
+function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCreditSubmissions, vendorReps, setVendorReps, vendorNotes, setVendorNotes, toast }) {
+  const [activeView, setActiveView] = useState("promos"); // "promos" | "credits" | "reps" | "notes"
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ brand: "", discount: "", startDate: "", endDate: "", assignedStaff: [], expectedCredit: "", creditReimbursement: false });
   const [expandedPhoto, setExpandedPhoto] = useState(null);
   const [repForm, setRepForm] = useState({ brand: "", repName: "", repEmail: "" });
   const [emailPreview, setEmailPreview] = useState(null);
+  const [noteForm, setNoteForm] = useState({ vendor: "", text: "", priority: "normal" });
+  const [noteFilter, setNoteFilter] = useState("all");
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [editNoteText, setEditNoteText] = useState("");
 
   const staffList = employees.filter(e => e.role !== "admin");
 
@@ -3301,12 +3305,56 @@ function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCredit
     }
   };
 
+  // Vendor notes management
+  const addNote = () => {
+    if (!noteForm.vendor.trim() || !noteForm.text.trim()) { toast.show("Enter vendor and note", "warning"); return; }
+    const note = { id: uid(), vendor: noteForm.vendor.trim(), text: noteForm.text.trim(), priority: noteForm.priority, resolved: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setVendorNotes(prev => [note, ...prev]);
+    setNoteForm({ vendor: "", text: "", priority: "normal" });
+    toast.show("Note added!");
+  };
+
+  const toggleNoteResolved = (id) => {
+    setVendorNotes(prev => prev.map(n => n.id === id ? { ...n, resolved: !n.resolved, updatedAt: new Date().toISOString() } : n));
+  };
+
+  const deleteNote = (id) => {
+    setVendorNotes(prev => prev.filter(n => n.id !== id));
+    toast.show("Note deleted", "warning");
+  };
+
+  const startEditNote = (note) => {
+    setEditingNoteId(note.id);
+    setEditNoteText(note.text);
+  };
+
+  const saveEditNote = (id) => {
+    if (!editNoteText.trim()) return;
+    setVendorNotes(prev => prev.map(n => n.id === id ? { ...n, text: editNoteText.trim(), updatedAt: new Date().toISOString() } : n));
+    setEditingNoteId(null);
+    setEditNoteText("");
+    toast.show("Note updated");
+  };
+
+  // Get unique vendor names from notes for filter dropdown
+  const noteVendors = [...new Set(vendorNotes.map(n => n.vendor))];
+  const filteredNotes = vendorNotes.filter(n => {
+    if (noteFilter === "all") return true;
+    if (noteFilter === "open") return !n.resolved;
+    if (noteFilter === "resolved") return n.resolved;
+    return n.vendor === noteFilter;
+  });
+
+  // Known vendor names from promos + notes for autocomplete
+  const knownVendors = [...new Set([...promos.map(p => p.brand), ...noteVendors])].sort();
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={() => setActiveView("promos")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "promos" ? "#10b981" : "#23232b", color: activeView === "promos" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Sale Promos</button>
         <button onClick={() => setActiveView("credits")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "credits" ? "#10b981" : "#23232b", color: activeView === "credits" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Vendor Credits</button>
         <button onClick={() => setActiveView("reps")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "reps" ? "#10b981" : "#23232b", color: activeView === "reps" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Vendor Reps</button>
+        <button onClick={() => setActiveView("notes")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "notes" ? "#10b981" : "#23232b", color: activeView === "notes" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Notes{vendorNotes.filter(n=>!n.resolved).length > 0 ? ` (${vendorNotes.filter(n=>!n.resolved).length})` : ""}</button>
       </div>
 
       {activeView === "promos" && <>
@@ -3498,6 +3546,85 @@ function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCredit
           </div>
         </div>
       </div>}
+
+      {activeView === "notes" && <>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, color: "#fff" }}>Vendor Notes</h3>
+        </div>
+
+        {/* Add Note Form */}
+        <div style={{ background: "#1a1a24", borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid #2d2d3a" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Vendor / Brand *</label>
+              <input list="vendor-list" value={noteForm.vendor} onChange={e => setNoteForm(f => ({ ...f, vendor: e.target.value }))} placeholder="e.g. Bouket" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+              <datalist id="vendor-list">{knownVendors.map(v => <option key={v} value={v} />)}</datalist>
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Priority</label>
+              <select value={noteForm.priority} onChange={e => setNoteForm(f => ({ ...f, priority: e.target.value }))} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }}>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Note *</label>
+            <textarea value={noteForm.text} onChange={e => setNoteForm(f => ({ ...f, text: e.target.value }))} placeholder="e.g. Still owe me 2 cases of flower because the THC% is not right" rows={3} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+          <button onClick={addNote} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 14 }}>+ Add Note</button>
+        </div>
+
+        {/* Filter */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ color: "#888", fontSize: 12 }}>Filter:</span>
+          {[["all","All"],["open","Open"],["resolved","Resolved"]].map(([k,l]) => (
+            <button key={k} onClick={() => setNoteFilter(k)} style={{ padding: "4px 14px", borderRadius: 16, border: "none", background: noteFilter === k ? "#10b981" : "#23232b", color: noteFilter === k ? "#fff" : "#aaa", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{l}</button>
+          ))}
+          {noteVendors.length > 0 && <span style={{ color: "#444", margin: "0 4px" }}>|</span>}
+          {noteVendors.map(v => (
+            <button key={v} onClick={() => setNoteFilter(noteFilter === v ? "all" : v)} style={{ padding: "4px 14px", borderRadius: 16, border: "none", background: noteFilter === v ? "#3b82f6" : "#23232b", color: noteFilter === v ? "#fff" : "#aaa", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{v}</button>
+          ))}
+        </div>
+
+        {/* Notes List */}
+        {filteredNotes.length === 0 && <div style={{ color: "#666", textAlign: "center", padding: 40 }}>No notes{noteFilter !== "all" ? " matching this filter" : " yet"}.</div>}
+
+        {filteredNotes.map(n => {
+          const priorityColors = { normal: "#6b7280", high: "#f59e0b", urgent: "#ef4444" };
+          const priorityLabels = { normal: "Normal", high: "High", urgent: "Urgent" };
+          const isEditing = editingNoteId === n.id;
+          return (
+            <div key={n.id} style={{ background: n.resolved ? "#13131a" : "#1a1a24", borderRadius: 12, padding: 14, marginBottom: 8, border: `1px solid ${n.resolved ? "#1d1d2a" : "#2d2d3a"}`, opacity: n.resolved ? 0.7 : 1, borderLeft: `3px solid ${priorityColors[n.priority]}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 700, color: "#fff", fontSize: 15 }}>{n.vendor}</span>
+                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: priorityColors[n.priority] + "22", color: priorityColors[n.priority] }}>{priorityLabels[n.priority]}</span>
+                  {n.resolved && <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: "#10b98122", color: "#10b981" }}>Resolved</span>}
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => toggleNoteResolved(n.id)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: n.resolved ? "#f59e0b" : "#10b981", color: "#fff", fontSize: 11, cursor: "pointer" }}>{n.resolved ? "Reopen" : "Resolve"}</button>
+                  {!isEditing && <button onClick={() => startEditNote(n)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#3b82f6", color: "#fff", fontSize: 11, cursor: "pointer" }}>Edit</button>}
+                  <button onClick={() => deleteNote(n.id)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#ef4444", color: "#fff", fontSize: 11, cursor: "pointer" }}>Delete</button>
+                </div>
+              </div>
+              {isEditing ? (
+                <div style={{ marginBottom: 6 }}>
+                  <textarea value={editNoteText} onChange={e => setEditNoteText(e.target.value)} rows={2} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 13, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button onClick={() => saveEditNote(n.id)} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#10b981", color: "#fff", fontSize: 11, cursor: "pointer" }}>Save</button>
+                    <button onClick={() => setEditingNoteId(null)} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#6b7280", color: "#fff", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: "#ccc", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 4 }}>{n.text}</div>
+              )}
+              <div style={{ color: "#555", fontSize: 11 }}>Added {new Date(n.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}{n.updatedAt !== n.createdAt ? " · Updated " + new Date(n.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}</div>
+            </div>
+          );
+        })}
+      </>}
 
       {expandedPhoto && <div onClick={() => setExpandedPhoto(null)} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, cursor: "pointer" }}>
         <img src={expandedPhoto} style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 12 }} alt="expanded" />
@@ -5346,6 +5473,7 @@ export default function App() {
   const [promos, setPromos] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_promos"))||[]; } catch { return []; } });
   const [creditSubmissions, setCreditSubmissions] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_credit_submissions"))||[]; } catch { return []; } });
   const [vendorReps, setVendorReps] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_reps"))||{}; } catch { return {}; } });
+  const [vendorNotes, setVendorNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_notes"))||[]; } catch { return []; } });
 
   // Persist
   useEffect(() => { localStorage.setItem("crewos_employees", JSON.stringify(employees)); }, [employees]);
@@ -5362,6 +5490,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_promos", JSON.stringify(promos)); }, [promos]);
   useEffect(() => { localStorage.setItem("crewos_credit_submissions", JSON.stringify(creditSubmissions)); }, [creditSubmissions]);
   useEffect(() => { localStorage.setItem("crewos_vendor_reps", JSON.stringify(vendorReps)); }, [vendorReps]);
+  useEffect(() => { localStorage.setItem("crewos_vendor_notes", JSON.stringify(vendorNotes)); }, [vendorNotes]);
 
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
@@ -5390,7 +5519,7 @@ export default function App() {
     if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
-      notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps,
+      notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps, vendorNotes,
       settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
@@ -5476,6 +5605,7 @@ export default function App() {
           if (data.promos && JSON.stringify(data.promos) !== JSON.stringify(promos)) setPromos(data.promos);
           if (data.creditSubmissions && JSON.stringify(data.creditSubmissions) !== JSON.stringify(creditSubmissions)) setCreditSubmissions(data.creditSubmissions);
           if (data.vendorReps && JSON.stringify(data.vendorReps) !== JSON.stringify(vendorReps)) setVendorReps(data.vendorReps);
+          if (data.vendorNotes && JSON.stringify(data.vendorNotes) !== JSON.stringify(vendorNotes)) setVendorNotes(data.vendorNotes);
         }
       } else if (isFirstPull) {
         // No data on Firebase yet — allow pushes to start
@@ -5815,7 +5945,7 @@ export default function App() {
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
           {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
-          {isAdmin && adminTab==="promo" && <AdminPromo employees={employees} promos={promos} setPromos={setPromos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} vendorReps={vendorReps} setVendorReps={setVendorReps} toast={toast} />}
+          {isAdmin && adminTab==="promo" && <AdminPromo employees={employees} promos={promos} setPromos={setPromos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} vendorReps={vendorReps} setVendorReps={setVendorReps} vendorNotes={vendorNotes} setVendorNotes={setVendorNotes} toast={toast} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} />}
