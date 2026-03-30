@@ -870,26 +870,53 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const [showHistory, setShowHistory] = useState(false);
 
   // Shift rows stored per week — no employee column, each cell is independent
-  // Auto-reconstruct shift rows from schedule data if localStorage is empty (e.g. new device or cleared cache)
+  // Always validate that saved shift IDs match actual schedule data (fixes Firebase sync on new devices)
+  const getScheduleShiftIds = (ws) => {
+    const prefix = ws + "_";
+    const ids = new Set();
+    Object.keys(schedule).forEach(key => {
+      if (key.startsWith(prefix)) {
+        const parts = key.slice(prefix.length);
+        const lastUnderscore = parts.lastIndexOf("_");
+        if (lastUnderscore > 0) {
+          ids.add(parts.slice(0, lastUnderscore));
+        }
+      }
+    });
+    return ids;
+  };
+
   const loadShifts = (ws) => {
     try {
       const saved = JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || [];
-      if (saved.length > 0) return saved;
-      // Reconstruct from schedule keys: format is weekStart_shiftId_dayIdx
-      const prefix = ws + "_";
-      const shiftIds = new Set();
-      Object.keys(schedule).forEach(key => {
-        if (key.startsWith(prefix)) {
-          const parts = key.slice(prefix.length);
-          const lastUnderscore = parts.lastIndexOf("_");
-          if (lastUnderscore > 0) {
-            const shiftId = parts.slice(0, lastUnderscore);
-            shiftIds.add(shiftId);
-          }
+      const scheduleIds = getScheduleShiftIds(ws);
+
+      // If we have saved shifts, check if they actually match the schedule data
+      if (saved.length > 0) {
+        const savedIds = new Set(saved.map(s => s.id));
+        // Check if any schedule shift IDs are missing from saved shifts
+        const missingFromSaved = [...scheduleIds].filter(id => !savedIds.has(id));
+        // Check if any saved shift IDs have actual schedule data
+        const savedHasData = saved.some(s => scheduleIds.has(s.id));
+
+        if (scheduleIds.size > 0 && !savedHasData) {
+          // Saved shift IDs are all stale (none match schedule data) — full reconstruct
+          const reconstructed = Array.from(scheduleIds).map(id => ({ id }));
+          localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(reconstructed));
+          return reconstructed;
         }
-      });
-      if (shiftIds.size > 0) {
-        const reconstructed = Array.from(shiftIds).map(id => ({ id }));
+        if (missingFromSaved.length > 0) {
+          // Merge: keep saved rows + add missing ones from schedule
+          const merged = [...saved, ...missingFromSaved.map(id => ({ id }))];
+          localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(merged));
+          return merged;
+        }
+        return saved;
+      }
+
+      // No saved shifts — reconstruct from schedule data
+      if (scheduleIds.size > 0) {
+        const reconstructed = Array.from(scheduleIds).map(id => ({ id }));
         localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(reconstructed));
         return reconstructed;
       }
@@ -906,11 +933,11 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
       prevWeekRef.current = weekStart;
     }
   }, [weekStart]);
-  // Reconstruct shifts if schedule data arrives (e.g. from Firebase) and shifts are empty
+  // Re-validate shifts whenever schedule data changes (e.g. Firebase sync arrives with new shift IDs)
   useEffect(() => {
-    if (shifts.length === 0) {
-      const reconstructed = loadShifts(weekStart);
-      if (reconstructed.length > 0) setShifts(reconstructed);
+    const reloaded = loadShifts(weekStart);
+    if (JSON.stringify(reloaded.map(s=>s.id).sort()) !== JSON.stringify(shifts.map(s=>s.id).sort())) {
+      setShifts(reloaded);
     }
   }, [schedule, weekStart]);
   useEffect(() => { saveShifts(weekStart, shifts); }, [shifts, weekStart]);
