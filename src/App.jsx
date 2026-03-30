@@ -870,8 +870,31 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const [showHistory, setShowHistory] = useState(false);
 
   // Shift rows stored per week — no employee column, each cell is independent
+  // Auto-reconstruct shift rows from schedule data if localStorage is empty (e.g. new device or cleared cache)
   const loadShifts = (ws) => {
-    try { return JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || []; } catch { return []; }
+    try {
+      const saved = JSON.parse(localStorage.getItem("crewos_shifts_" + ws)) || [];
+      if (saved.length > 0) return saved;
+      // Reconstruct from schedule keys: format is weekStart_shiftId_dayIdx
+      const prefix = ws + "_";
+      const shiftIds = new Set();
+      Object.keys(schedule).forEach(key => {
+        if (key.startsWith(prefix)) {
+          const parts = key.slice(prefix.length);
+          const lastUnderscore = parts.lastIndexOf("_");
+          if (lastUnderscore > 0) {
+            const shiftId = parts.slice(0, lastUnderscore);
+            shiftIds.add(shiftId);
+          }
+        }
+      });
+      if (shiftIds.size > 0) {
+        const reconstructed = Array.from(shiftIds).map(id => ({ id }));
+        localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(reconstructed));
+        return reconstructed;
+      }
+      return [];
+    } catch { return []; }
   };
   const [shifts, setShifts] = useState(() => loadShifts(weekStart));
   const saveShifts = (ws, s) => { localStorage.setItem("crewos_shifts_" + ws, JSON.stringify(s)); };
@@ -883,6 +906,13 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
       prevWeekRef.current = weekStart;
     }
   }, [weekStart]);
+  // Reconstruct shifts if schedule data arrives (e.g. from Firebase) and shifts are empty
+  useEffect(() => {
+    if (shifts.length === 0) {
+      const reconstructed = loadShifts(weekStart);
+      if (reconstructed.length > 0) setShifts(reconstructed);
+    }
+  }, [schedule, weekStart]);
   useEffect(() => { saveShifts(weekStart, shifts); }, [shifts, weekStart]);
 
   // schedule keys: weekStart_shiftId_dayIdx = { empId, start, end }
@@ -3144,6 +3174,471 @@ function InvoiceVerifier({ toast }) {
   );
 }
 
+// ─── ADMIN: PROMOS & VENDOR CREDITS ──────────────────────────────────────────
+function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCreditSubmissions, vendorReps, setVendorReps, toast }) {
+  const [activeView, setActiveView] = useState("promos"); // "promos" | "credits" | "reps"
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ brand: "", discount: "", startDate: "", endDate: "", assignedStaff: [], expectedCredit: "", creditReimbursement: false });
+  const [expandedPhoto, setExpandedPhoto] = useState(null);
+  const [repForm, setRepForm] = useState({ brand: "", repName: "", repEmail: "" });
+  const [emailPreview, setEmailPreview] = useState(null);
+
+  const staffList = employees.filter(e => e.role !== "admin");
+
+  const toggleStaff = (id) => {
+    setForm(f => ({ ...f, assignedStaff: f.assignedStaff.includes(id) ? f.assignedStaff.filter(s => s !== id) : [...f.assignedStaff, id] }));
+  };
+
+  const today = new Date().toISOString().split("T")[0];
+
+  const getPromoStatus = (p) => {
+    if (p.status === "completed") return "completed";
+    if (p.endDate < today) return "ended";
+    if (p.startDate <= today && p.endDate >= today) return "active";
+    if (p.startDate > today) return "active"; // upcoming, still show as active
+    return "ended";
+  };
+
+  const createPromo = () => {
+    if (!form.brand.trim()) { toast.show("Enter brand name", "warning"); return; }
+    if (!form.startDate || !form.endDate) { toast.show("Select start and end dates", "warning"); return; }
+    if (form.assignedStaff.length === 0) { toast.show("Assign at least one staff member", "warning"); return; }
+    const promo = {
+      id: uid(), brand: form.brand.trim(), discount: form.discount.trim(),
+      startDate: form.startDate, endDate: form.endDate,
+      assignedStaff: form.assignedStaff,
+      expectedCredit: form.expectedCredit ? Number(form.expectedCredit) : null,
+      creditReimbursement: form.creditReimbursement,
+      status: "active", createdAt: new Date().toISOString(),
+    };
+    setPromos(prev => [promo, ...prev]);
+    setForm({ brand: "", discount: "", startDate: "", endDate: "", assignedStaff: [], expectedCredit: "", creditReimbursement: false });
+    setShowForm(false);
+    toast.show("Promo created!");
+  };
+
+  const deletePromo = (id) => {
+    setPromos(prev => prev.filter(p => p.id !== id));
+    toast.show("Promo deleted", "warning");
+  };
+
+  const markComplete = (id) => {
+    setPromos(prev => prev.map(p => p.id === id ? { ...p, status: "completed" } : p));
+    toast.show("Promo marked complete");
+  };
+
+  const markCreditReviewed = (cid) => {
+    setCreditSubmissions(prev => prev.map(c => c.id === cid ? { ...c, reviewed: true, reviewedAt: new Date().toISOString() } : c));
+    toast.show("Credit marked as reviewed");
+  };
+
+  const markCreditUnreviewed = (cid) => {
+    setCreditSubmissions(prev => prev.map(c => c.id === cid ? { ...c, reviewed: false, reviewedAt: null } : c));
+    toast.show("Credit marked as pending");
+  };
+
+  // Group credits by brand
+  const creditsByBrand = {};
+  creditSubmissions.forEach(c => {
+    if (!creditsByBrand[c.brand]) creditsByBrand[c.brand] = [];
+    creditsByBrand[c.brand].push(c);
+  });
+  const totalOutstanding = creditSubmissions.filter(c => !c.reviewed).reduce((sum, c) => sum + (c.creditAmount || 0), 0);
+
+  const statusColor = { active: "#10b981", ended: "#f59e0b", completed: "#6b7280" };
+  const statusLabel = { active: "Active", ended: "Ended - Pending Credit", completed: "Completed" };
+
+  const nameMap = {};
+  employees.forEach(e => { nameMap[e.id] = e.name; });
+
+  // Vendor rep management
+  const saveRep = () => {
+    if (!repForm.brand.trim() || !repForm.repName.trim()) { toast.show("Enter brand and rep name", "warning"); return; }
+    setVendorReps(prev => ({ ...prev, [repForm.brand.trim()]: { name: repForm.repName.trim(), email: repForm.repEmail.trim() } }));
+    toast.show("Vendor rep saved for " + repForm.brand.trim());
+    setRepForm({ brand: "", repName: "", repEmail: "" });
+  };
+
+  const deleteRep = (brand) => {
+    setVendorReps(prev => { const n = { ...prev }; delete n[brand]; return n; });
+    toast.show("Vendor rep removed", "warning");
+  };
+
+  // Email template for requesting credit
+  const generateEmailTemplate = (credit) => {
+    const rep = vendorReps[credit.brand] || {};
+    const repName = rep.name || "[Rep Name]";
+    const repEmail = rep.email || "";
+    const subject = `Credit Reimbursement Request - ${credit.brand} Promotion`;
+    const body = `Hi ${repName},\n\nI hope this message finds you well. I'm reaching out regarding the recent ${credit.brand} promotion we ran at Woodhaven Cannabis (${credit.promoStart} to ${credit.promoEnd}).\n\nOur staff has submitted the sale report for this promotion. The credit amount is $${credit.creditAmount}.\n\nPlease let us know how to proceed with the credit reimbursement.\n\nThank you,\nChris\nWoodhaven Cannabis\n63-08 Woodhaven Blvd, Rego Park, NY 11374`;
+    return { repName, repEmail, subject, body };
+  };
+
+  const openEmailForCredit = (credit) => {
+    const tmpl = generateEmailTemplate(credit);
+    if (tmpl.repEmail) {
+      window.open(`mailto:${tmpl.repEmail}?subject=${encodeURIComponent(tmpl.subject)}&body=${encodeURIComponent(tmpl.body)}`);
+    } else {
+      setEmailPreview(tmpl);
+      toast.show("No email saved for this brand - add it in Vendor Reps", "warning");
+    }
+  };
+
+  const openEmailBulk = (brand) => {
+    const rep = vendorReps[brand] || {};
+    const brandCredits = creditsByBrand[brand] || [];
+    const outstanding = brandCredits.filter(c => !c.reviewed);
+    const totalAmt = outstanding.reduce((s, c) => s + (c.creditAmount || 0), 0);
+    const repName = rep.name || "[Rep Name]";
+    const repEmail = rep.email || "";
+    const subject = `Credit Reimbursement Request - ${brand} Promotions`;
+    const body = `Hi ${repName},\n\nI hope this message finds you well. I'm reaching out regarding outstanding credit reimbursements for ${brand} promotions at Woodhaven Cannabis.\n\nTotal outstanding: $${totalAmt.toFixed(2)} across ${outstanding.length} submission(s).\n\n${outstanding.map(c => `- $${c.creditAmount} (${c.promoStart} to ${c.promoEnd}) submitted by ${c.submittedByName}`).join("\n")}\n\nPlease let us know how to proceed.\n\nThank you,\nChris\nWoodhaven Cannabis\n63-08 Woodhaven Blvd, Rego Park, NY 11374`;
+    if (repEmail) {
+      window.open(`mailto:${repEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    } else {
+      setEmailPreview({ repName, repEmail, subject, body });
+      toast.show("No email saved for " + brand + " - add it in Vendor Reps", "warning");
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => setActiveView("promos")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "promos" ? "#10b981" : "#23232b", color: activeView === "promos" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Sale Promos</button>
+        <button onClick={() => setActiveView("credits")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "credits" ? "#10b981" : "#23232b", color: activeView === "credits" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Vendor Credits</button>
+        <button onClick={() => setActiveView("reps")} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: activeView === "reps" ? "#10b981" : "#23232b", color: activeView === "reps" ? "#fff" : "#aaa", fontWeight: 600, cursor: "pointer" }}>Vendor Reps</button>
+      </div>
+
+      {activeView === "promos" && <>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, color: "#fff" }}>Sale Promotions</h3>
+          <button onClick={() => setShowForm(!showForm)} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontWeight: 600, cursor: "pointer" }}>{showForm ? "Cancel" : "+ New Promo"}</button>
+        </div>
+
+        {showForm && <div style={{ background: "#1a1a24", borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid #2d2d3a" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Brand Name *</label>
+              <input value={form.brand} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="e.g. Dank" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Discount Description</label>
+              <input value={form.discount} onChange={e => setForm(f => ({ ...f, discount: e.target.value }))} placeholder="e.g. 20% off all products" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Start Date *</label>
+              <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>End Date *</label>
+              <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Expected Credit from Vendor ($)</label>
+              <input type="number" value={form.expectedCredit} onChange={e => setForm(f => ({ ...f, expectedCredit: e.target.value }))} placeholder="Optional" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 4 }}>
+              <label style={{ color: "#ccc", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={form.creditReimbursement} onChange={e => setForm(f => ({ ...f, creditReimbursement: e.target.checked }))} style={{ width: 18, height: 18 }} />
+                Credit Reimbursement Required
+              </label>
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 6 }}>Assign Staff *</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {staffList.map(e => (
+                <div key={e.id} onClick={() => toggleStaff(e.id)} style={{ padding: "6px 14px", borderRadius: 20, border: form.assignedStaff.includes(e.id) ? "2px solid #10b981" : "1px solid #333", background: form.assignedStaff.includes(e.id) ? "rgba(16,185,129,0.15)" : "#23232b", color: form.assignedStaff.includes(e.id) ? "#10b981" : "#aaa", fontSize: 13, cursor: "pointer", fontWeight: form.assignedStaff.includes(e.id) ? 600 : 400 }}>{e.name}</div>
+              ))}
+            </div>
+          </div>
+          <button onClick={createPromo} style={{ marginTop: 14, padding: "10px 24px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 14 }}>Create Promo</button>
+        </div>}
+
+        {promos.length === 0 && !showForm && <div style={{ color: "#666", textAlign: "center", padding: 40 }}>No promotions yet. Create one to get started.</div>}
+
+        {promos.map(p => {
+          const status = getPromoStatus(p);
+          const subs = creditSubmissions.filter(c => c.promoId === p.id);
+          const totalSubmitted = subs.reduce((s, c) => s + (c.creditAmount || 0), 0);
+          return (
+            <div key={p.id} style={{ background: "#1a1a24", borderRadius: 12, padding: 14, marginBottom: 10, border: "1px solid #2d2d3a" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontWeight: 700, color: "#fff", fontSize: 16 }}>{p.brand}</span>
+                  <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: statusColor[status] + "22", color: statusColor[status] }}>{statusLabel[status]}</span>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {status === "ended" && <button onClick={() => markComplete(p.id)} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#3b82f6", color: "#fff", fontSize: 11, cursor: "pointer" }}>Mark Complete</button>}
+                  <button onClick={() => deletePromo(p.id)} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#ef4444", color: "#fff", fontSize: 11, cursor: "pointer" }}>Delete</button>
+                </div>
+              </div>
+              {p.discount && <div style={{ color: "#aaa", fontSize: 13, marginBottom: 4 }}>{p.discount}</div>}
+              <div style={{ color: "#888", fontSize: 12, marginBottom: 4 }}>{p.startDate} to {p.endDate}</div>
+              <div style={{ color: "#888", fontSize: 12, marginBottom: 4 }}>Staff: {p.assignedStaff.map(id => nameMap[id] || id).join(", ")}</div>
+              {p.creditReimbursement && <div style={{ color: "#f59e0b", fontSize: 12, marginBottom: 4 }}>Credit reimbursement required{p.expectedCredit ? ` - Expected: $${p.expectedCredit}` : ""}</div>}
+              {subs.length > 0 && <div style={{ color: "#10b981", fontSize: 12 }}>Credit submitted: ${totalSubmitted}{p.expectedCredit ? ` / $${p.expectedCredit}` : ""} ({subs.length} submission{subs.length > 1 ? "s" : ""})</div>}
+            </div>
+          );
+        })}
+      </>}
+
+      {activeView === "credits" && <>
+        <h3 style={{ margin: "0 0 6px 0", color: "#fff" }}>Vendor Credits Overview</h3>
+        <div style={{ background: "#1a1a24", borderRadius: 12, padding: 14, marginBottom: 16, border: "1px solid #2d2d3a", textAlign: "center" }}>
+          <div style={{ color: "#aaa", fontSize: 12 }}>Total Outstanding Credits</div>
+          <div style={{ color: "#f59e0b", fontSize: 28, fontWeight: 700 }}>${totalOutstanding.toFixed(2)}</div>
+        </div>
+
+        {Object.keys(creditsByBrand).length === 0 && <div style={{ color: "#666", textAlign: "center", padding: 40 }}>No credit submissions yet.</div>}
+
+        {Object.entries(creditsByBrand).map(([brand, credits]) => {
+          const outstanding = credits.filter(c => !c.reviewed).reduce((s, c) => s + (c.creditAmount || 0), 0);
+          const rep = vendorReps[brand];
+          return (
+            <div key={brand} style={{ marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div>
+                  <span style={{ fontWeight: 700, color: "#fff", fontSize: 15 }}>{brand}</span>
+                  {rep && <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>Rep: {rep.name}</span>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: outstanding > 0 ? "#f59e0b" : "#10b981", fontSize: 13, fontWeight: 600 }}>Outstanding: ${outstanding.toFixed(2)}</span>
+                  {outstanding > 0 && <button onClick={() => openEmailBulk(brand)} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#3b82f6", color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Email Vendor</button>}
+                </div>
+              </div>
+              {credits.map(c => (
+                <div key={c.id} style={{ background: "#1a1a24", borderRadius: 10, padding: 12, marginBottom: 6, border: "1px solid #2d2d3a" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                    <div>
+                      <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>${c.creditAmount} - by {c.submittedByName}</div>
+                      <div style={{ color: "#888", fontSize: 11 }}>Promo: {c.promoStart} to {c.promoEnd}</div>
+                      <div style={{ color: "#888", fontSize: 11 }}>Submitted: {new Date(c.submittedAt).toLocaleString()}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: c.reviewed ? "#10b98122" : "#f59e0b22", color: c.reviewed ? "#10b981" : "#f59e0b" }}>{c.reviewed ? "Reviewed" : "Pending"}</span>
+                      {!c.reviewed && <button onClick={() => openEmailForCredit(c)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#3b82f6", color: "#fff", fontSize: 11, cursor: "pointer" }}>Email</button>}
+                      {!c.reviewed && <button onClick={() => markCreditReviewed(c.id)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#10b981", color: "#fff", fontSize: 11, cursor: "pointer" }}>Reviewed</button>}
+                      {c.reviewed && <button onClick={() => markCreditUnreviewed(c.id)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#6b7280", color: "#fff", fontSize: 11, cursor: "pointer" }}>Undo</button>}
+                    </div>
+                  </div>
+                  {c.photo && <div style={{ marginTop: 8 }}>
+                    <img src={c.photo} onClick={() => setExpandedPhoto(c.photo)} style={{ maxWidth: 120, maxHeight: 90, borderRadius: 8, cursor: "pointer", border: "1px solid #333" }} alt="credit report" />
+                  </div>}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </>}
+
+      {/* ─── VENDOR REPS VIEW ─── */}
+      {activeView === "reps" && <>
+        <h3 style={{ margin: "0 0 12px 0", color: "#fff" }}>Vendor Representatives</h3>
+        <p style={{ color: "#888", fontSize: 12, marginBottom: 12 }}>Link each brand to a vendor rep. Their name auto-fills in email templates when you request credit reimbursement.</p>
+
+        <div style={{ background: "#1a1a24", borderRadius: 12, padding: 14, marginBottom: 16, border: "1px solid #2d2d3a" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Brand Name *</label>
+              <input value={repForm.brand} onChange={e => setRepForm(f => ({ ...f, brand: e.target.value }))} placeholder="e.g. Dank" list="brand-suggestions" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+              <datalist id="brand-suggestions">
+                {promos.map(p => p.brand).filter((b, i, a) => a.indexOf(b) === i).map(b => <option key={b} value={b} />)}
+              </datalist>
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Rep Name *</label>
+              <input value={repForm.repName} onChange={e => setRepForm(f => ({ ...f, repName: e.target.value }))} placeholder="e.g. John Smith" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Rep Email</label>
+              <input value={repForm.repEmail} onChange={e => setRepForm(f => ({ ...f, repEmail: e.target.value }))} placeholder="e.g. john@dank.com" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+            </div>
+          </div>
+          <button onClick={saveRep} style={{ marginTop: 12, padding: "8px 20px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Save Rep</button>
+        </div>
+
+        {Object.keys(vendorReps).length === 0 && <div style={{ color: "#666", textAlign: "center", padding: 40 }}>No vendor reps saved yet. Add one above.</div>}
+
+        {Object.entries(vendorReps).map(([brand, rep]) => (
+          <div key={brand} style={{ background: "#1a1a24", borderRadius: 10, padding: 12, marginBottom: 8, border: "1px solid #2d2d3a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{brand}</div>
+              <div style={{ color: "#aaa", fontSize: 12 }}>{rep.name}{rep.email ? " - " + rep.email : ""}</div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setRepForm({ brand, repName: rep.name, repEmail: rep.email || "" })} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#3b82f6", color: "#fff", fontSize: 11, cursor: "pointer" }}>Edit</button>
+              <button onClick={() => deleteRep(brand)} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#ef4444", color: "#fff", fontSize: 11, cursor: "pointer" }}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </>}
+
+      {/* ─── EMAIL PREVIEW MODAL ─── */}
+      {emailPreview && <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20 }}>
+        <div style={{ background: "#1a1a24", borderRadius: 16, padding: 20, maxWidth: 500, width: "100%", border: "1px solid #2d2d3a", maxHeight: "80vh", overflow: "auto" }}>
+          <h3 style={{ margin: "0 0 12px 0", color: "#fff" }}>Email Preview</h3>
+          {!emailPreview.repEmail && <div style={{ background: "#f59e0b22", color: "#f59e0b", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>No email address saved for this vendor. Go to Vendor Reps to add one, or copy this template manually.</div>}
+          <div style={{ marginBottom: 8 }}>
+            <label style={{ color: "#aaa", fontSize: 11 }}>To:</label>
+            <div style={{ color: "#fff", fontSize: 13 }}>{emailPreview.repEmail || "(no email saved)"}</div>
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <label style={{ color: "#aaa", fontSize: 11 }}>Subject:</label>
+            <div style={{ color: "#fff", fontSize: 13 }}>{emailPreview.subject}</div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ color: "#aaa", fontSize: 11 }}>Body:</label>
+            <pre style={{ color: "#ccc", fontSize: 12, whiteSpace: "pre-wrap", background: "#13131a", padding: 10, borderRadius: 8, border: "1px solid #333", margin: "4px 0 0 0" }}>{emailPreview.body}</pre>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { navigator.clipboard.writeText(emailPreview.body); toast.show("Email body copied!"); }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Copy Body</button>
+            {emailPreview.repEmail && <button onClick={() => { window.open(`mailto:${emailPreview.repEmail}?subject=${encodeURIComponent(emailPreview.subject)}&body=${encodeURIComponent(emailPreview.body)}`); setEmailPreview(null); }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#3b82f6", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Open in Email</button>}
+            <button onClick={() => setEmailPreview(null)} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#6b7280", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Close</button>
+          </div>
+        </div>
+      </div>}
+
+      {expandedPhoto && <div onClick={() => setExpandedPhoto(null)} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, cursor: "pointer" }}>
+        <img src={expandedPhoto} style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 12 }} alt="expanded" />
+      </div>}
+    </div>
+  );
+}
+
+// ─── EMPLOYEE: CREDIT SUBMISSIONS ───────────────────────────────────────────
+function EmpCredits({ employee, promos, creditSubmissions, setCreditSubmissions, toast }) {
+  const [selectedPromo, setSelectedPromo] = useState(null);
+  const [creditAmount, setCreditAmount] = useState("");
+  const [photo, setPhoto] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const today = new Date().toISOString().split("T")[0];
+
+  // Show promos assigned to this employee that have ended and need credit submission
+  const myPromos = promos.filter(p =>
+    p.assignedStaff && p.assignedStaff.includes(employee.id) &&
+    p.creditReimbursement &&
+    p.endDate < today &&
+    p.status !== "completed"
+  );
+
+  // Already submitted by this employee
+  const mySubmissions = creditSubmissions.filter(c => c.submittedById === employee.id);
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.show("Photo must be under 5MB", "warning"); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhoto(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const submitCredit = () => {
+    if (!selectedPromo) { toast.show("Select a promo first", "warning"); return; }
+    if (!creditAmount || isNaN(Number(creditAmount)) || Number(creditAmount) <= 0) { toast.show("Enter a valid credit amount", "warning"); return; }
+    if (!photo) { toast.show("Please attach a sale report photo", "warning"); return; }
+
+    const alreadySubmitted = creditSubmissions.some(c => c.promoId === selectedPromo.id && c.submittedById === employee.id);
+    if (alreadySubmitted) { toast.show("You already submitted credit for this promo", "warning"); return; }
+
+    setSubmitting(true);
+    const submission = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      promoId: selectedPromo.id,
+      brand: selectedPromo.brand,
+      promoStart: selectedPromo.startDate,
+      promoEnd: selectedPromo.endDate,
+      creditAmount: Number(creditAmount),
+      photo,
+      submittedById: employee.id,
+      submittedByName: employee.name,
+      submittedAt: new Date().toISOString(),
+      reviewed: false,
+      reviewedAt: null,
+    };
+    setCreditSubmissions(prev => [submission, ...prev]);
+    toast.show("Credit report submitted!");
+    setSelectedPromo(null);
+    setCreditAmount("");
+    setPhoto(null);
+    setSubmitting(false);
+  };
+
+  return (
+    <div>
+      <h3 style={{ margin: "0 0 12px 0", color: "#fff" }}>Credit Submissions</h3>
+
+      {/* Pending promos that need credit submission */}
+      {myPromos.length > 0 && <>
+        <div style={{ background: "#f59e0b22", borderRadius: 12, padding: 14, marginBottom: 16, border: "1px solid #f59e0b44" }}>
+          <div style={{ color: "#f59e0b", fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Promos Needing Credit Report</div>
+          {myPromos.map(p => {
+            const alreadyDone = creditSubmissions.some(c => c.promoId === p.id && c.submittedById === employee.id);
+            return (
+              <div key={p.id} style={{ background: "#1a1a24", borderRadius: 10, padding: 12, marginBottom: 8, border: "1px solid #2d2d3a" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{p.brand}</div>
+                    <div style={{ color: "#888", fontSize: 12 }}>{p.discount || "No discount info"}</div>
+                    <div style={{ color: "#888", fontSize: 11 }}>{p.startDate} to {p.endDate}</div>
+                    {p.expectedCredit && <div style={{ color: "#aaa", fontSize: 11 }}>Expected credit: ${p.expectedCredit}</div>}
+                  </div>
+                  {alreadyDone
+                    ? <span style={{ padding: "4px 12px", borderRadius: 8, background: "#10b98122", color: "#10b981", fontSize: 12, fontWeight: 600 }}>Submitted</span>
+                    : <button onClick={() => setSelectedPromo(p)} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: "#10b981", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Submit Credit</button>
+                  }
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>}
+
+      {/* Submit credit form */}
+      {selectedPromo && <div style={{ background: "#1a1a24", borderRadius: 12, padding: 16, marginBottom: 16, border: "2px solid #10b981" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h4 style={{ margin: 0, color: "#10b981" }}>Submit Credit for: {selectedPromo.brand}</h4>
+          <button onClick={() => { setSelectedPromo(null); setPhoto(null); setCreditAmount(""); }} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#6b7280", color: "#fff", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Credit Amount ($) *</label>
+          <input type="number" value={creditAmount} onChange={e => setCreditAmount(e.target.value)} placeholder="e.g. 250" style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#13131a", color: "#fff", fontSize: 14, boxSizing: "border-box" }} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ color: "#aaa", fontSize: 12, display: "block", marginBottom: 4 }}>Sale Report Photo *</label>
+          <input type="file" accept="image/*" capture="environment" onChange={handlePhotoChange} style={{ color: "#ccc", fontSize: 13 }} />
+          {photo && <img src={photo} style={{ maxWidth: 150, maxHeight: 100, marginTop: 8, borderRadius: 8, border: "1px solid #333" }} alt="preview" />}
+        </div>
+        <button onClick={submitCredit} disabled={submitting} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: submitting ? "#6b7280" : "#10b981", color: "#fff", fontWeight: 600, cursor: submitting ? "default" : "pointer", fontSize: 14 }}>
+          {submitting ? "Submitting..." : "Submit Credit Report"}
+        </button>
+      </div>}
+
+      {/* My past submissions */}
+      <h4 style={{ color: "#aaa", fontSize: 13, marginBottom: 8 }}>My Submissions</h4>
+      {mySubmissions.length === 0 && <div style={{ color: "#666", textAlign: "center", padding: 30, fontSize: 13 }}>No credit submissions yet.</div>}
+      {mySubmissions.map(c => (
+        <div key={c.id} style={{ background: "#1a1a24", borderRadius: 10, padding: 12, marginBottom: 8, border: "1px solid #2d2d3a" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{c.brand} - ${c.creditAmount}</div>
+              <div style={{ color: "#888", fontSize: 11 }}>Promo: {c.promoStart} to {c.promoEnd}</div>
+              <div style={{ color: "#888", fontSize: 11 }}>Submitted: {new Date(c.submittedAt).toLocaleString()}</div>
+            </div>
+            <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: c.reviewed ? "#10b98122" : "#f59e0b22", color: c.reviewed ? "#10b981" : "#f59e0b" }}>{c.reviewed ? "Reviewed" : "Pending"}</span>
+          </div>
+          {c.photo && <img src={c.photo} style={{ maxWidth: 100, maxHeight: 70, marginTop: 8, borderRadius: 6, border: "1px solid #333" }} alt="report" />}
+        </div>
+      ))}
+
+      {/* No pending promos message */}
+      {myPromos.length === 0 && mySubmissions.length === 0 && <div style={{ color: "#888", textAlign: "center", padding: 20, fontSize: 13 }}>No promos assigned to you that need credit reports.</div>}
+    </div>
+  );
+}
+
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
 function AdminVendor({ notifications, setNotifications, toast, settings }) {
   const [fields, setFields] = useState(() => {
@@ -4848,6 +5343,9 @@ export default function App() {
   const [shiftNotes, setShiftNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_shiftnotes"))||[]; } catch { return []; } });
   const [announcements, setAnnouncements] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_announcements"))||[]; } catch { return []; } });
   const [taskTypes, setTaskTypes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_task_types"))||[]; } catch { return []; } });
+  const [promos, setPromos] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_promos"))||[]; } catch { return []; } });
+  const [creditSubmissions, setCreditSubmissions] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_credit_submissions"))||[]; } catch { return []; } });
+  const [vendorReps, setVendorReps] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_reps"))||{}; } catch { return {}; } });
 
   // Persist
   useEffect(() => { localStorage.setItem("crewos_employees", JSON.stringify(employees)); }, [employees]);
@@ -4861,6 +5359,9 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_shiftnotes", JSON.stringify(shiftNotes)); }, [shiftNotes]);
   useEffect(() => { localStorage.setItem("crewos_announcements", JSON.stringify(announcements)); }, [announcements]);
   useEffect(() => { localStorage.setItem("crewos_task_types", JSON.stringify(taskTypes)); }, [taskTypes]);
+  useEffect(() => { localStorage.setItem("crewos_promos", JSON.stringify(promos)); }, [promos]);
+  useEffect(() => { localStorage.setItem("crewos_credit_submissions", JSON.stringify(creditSubmissions)); }, [creditSubmissions]);
+  useEffect(() => { localStorage.setItem("crewos_vendor_reps", JSON.stringify(vendorReps)); }, [vendorReps]);
 
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
@@ -4889,7 +5390,7 @@ export default function App() {
     if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
-      notifications, drawerLogs, shiftNotes, announcements, taskTypes,
+      notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps,
       settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
@@ -4934,7 +5435,7 @@ export default function App() {
         firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
       }
     });
-  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings]);
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings, promos, creditSubmissions]);
 
   // Pull data from Firebase on load + poll for changes
   useEffect(() => {
@@ -4972,6 +5473,9 @@ export default function App() {
           if (data.shiftNotes && JSON.stringify(data.shiftNotes) !== JSON.stringify(shiftNotes)) setShiftNotes(data.shiftNotes);
           if (data.announcements && JSON.stringify(data.announcements) !== JSON.stringify(announcements)) setAnnouncements(data.announcements);
           if (data.taskTypes && JSON.stringify(data.taskTypes) !== JSON.stringify(taskTypes)) setTaskTypes(data.taskTypes);
+          if (data.promos && JSON.stringify(data.promos) !== JSON.stringify(promos)) setPromos(data.promos);
+          if (data.creditSubmissions && JSON.stringify(data.creditSubmissions) !== JSON.stringify(creditSubmissions)) setCreditSubmissions(data.creditSubmissions);
+          if (data.vendorReps && JSON.stringify(data.vendorReps) !== JSON.stringify(vendorReps)) setVendorReps(data.vendorReps);
         }
       } else if (isFirstPull) {
         // No data on Firebase yet — allow pushes to start
@@ -5276,8 +5780,8 @@ export default function App() {
   if (!user) return (<><style>{CSS}</style><PinLogin onLogin={setUser} employees={employees} />{toast.el}</>);
 
   const isAdmin = user.role === "admin";
-  const adminTabs = [["schedule","Schedule"],["employees","Staff"],["payroll","Payroll"],["tasks","Tasks"],["vendor","Vendor"],["alerts","Alerts"],["settings","Settings"]].concat(settings.drawerEnabled !== false ? [["drawer","Drawer"]] : []);
-  const empTabs = [["schedule","My Schedule"],["hours","My Hours"],["tasks","My Tasks"]];
+  const adminTabs = [["schedule","Schedule"],["employees","Staff"],["payroll","Payroll"],["tasks","Tasks"],["vendor","Vendor"],["promo","Promos"],["alerts","Alerts"],["settings","Settings"]].concat(settings.drawerEnabled !== false ? [["drawer","Drawer"]] : []);
+  const empTabs = [["schedule","My Schedule"],["hours","My Hours"],["tasks","My Tasks"],["credits","Credits"]];
 
   return (
     <>
@@ -5311,6 +5815,7 @@ export default function App() {
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
           {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
+          {isAdmin && adminTab==="promo" && <AdminPromo employees={employees} promos={promos} setPromos={setPromos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} vendorReps={vendorReps} setVendorReps={setVendorReps} toast={toast} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
           {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} />}
@@ -5318,6 +5823,7 @@ export default function App() {
           {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
           {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} nfcEnabled={settings.nfcEnabled || false} />}
           {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} announcements={announcements} settings={settings} />}
+          {!isAdmin && empTab==="credits" && <EmpCredits employee={user} promos={promos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} toast={toast} />}
         </div>
       </div>
 
