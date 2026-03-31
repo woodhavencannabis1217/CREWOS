@@ -3796,7 +3796,29 @@ function EmpCredits({ employee, promos, creditSubmissions, setCreditSubmissions,
 }
 
 // ─── ADMIN: VENDOR ───────────────────────────────────────────────────────────
-function AdminVendor({ notifications, setNotifications, toast, settings }) {
+function AdminVendor({ notifications, setNotifications, toast, settings, vendorNotes, setVendorNotes }) {
+  const [noteText, setNoteText] = useState("");
+  const [noteVendor, setNoteVendor] = useState("");
+  const [noteFilter, setNoteFilter] = useState("all");
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState("");
+
+  const addNote = () => {
+    if (!noteText.trim()) { toast.show("Write a note first", "warning"); return; }
+    const note = { id: Date.now().toString(36) + Math.random().toString(36).slice(2,6), vendor: noteVendor.trim() || "General", text: noteText.trim(), resolved: false, createdAt: new Date().toISOString() };
+    setVendorNotes(prev => [note, ...(prev||[])]);
+    setNoteText(""); setNoteVendor("");
+    toast.show("Note added!");
+  };
+
+  const deleteNote = (id) => { setVendorNotes(prev => prev.filter(n => n.id !== id)); toast.show("Note deleted", "warning"); };
+  const toggleResolved = (id) => { setVendorNotes(prev => prev.map(n => n.id === id ? { ...n, resolved: !n.resolved } : n)); };
+  const saveEdit = (id) => { if (!editText.trim()) return; setVendorNotes(prev => prev.map(n => n.id === id ? { ...n, text: editText.trim() } : n)); setEditId(null); toast.show("Note updated"); };
+
+  const notes = vendorNotes || [];
+  const vendors = [...new Set(notes.map(n => n.vendor))].sort();
+  const filtered = noteFilter === "all" ? notes : noteFilter === "open" ? notes.filter(n => !n.resolved) : noteFilter === "resolved" ? notes.filter(n => n.resolved) : notes.filter(n => n.vendor === noteFilter);
+
   const [fields, setFields] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("crewos_vendor_fields"));
@@ -3847,6 +3869,51 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
 
   return (
     <div>
+      {/* ── Vendor Notes ── */}
+      <div style={{marginBottom:24}}>
+        <div className="sec-head">Vendor Notes</div>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          <input value={noteVendor} onChange={e => setNoteVendor(e.target.value)} placeholder="Vendor name (e.g. MFNY)" list="vn-vendors" style={{width:160,fontSize:13,padding:"8px 10px"}} />
+          <datalist id="vn-vendors">{vendors.map(v => <option key={v} value={v} />)}</datalist>
+          <input value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Write a note... (e.g. returning 2 cases of 510 cart)" onKeyDown={e => e.key === "Enter" && addNote()} style={{flex:1,fontSize:13,padding:"8px 10px"}} />
+          <button className="btn primary" onClick={addNote} style={{whiteSpace:"nowrap"}}>+ Add</button>
+        </div>
+        {notes.length > 0 && <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+          {[["all","All"],["open","Open"],["resolved","Done"]].map(([k,l]) => (
+            <button key={k} onClick={() => setNoteFilter(k)} className={"btn small" + (noteFilter === k ? " primary" : "")} style={{fontSize:11,padding:"3px 12px"}}>{l}</button>
+          ))}
+          {vendors.map(v => (
+            <button key={v} onClick={() => setNoteFilter(noteFilter === v ? "all" : v)} className={"btn small" + (noteFilter === v ? " primary" : "")} style={{fontSize:11,padding:"3px 12px"}}>{v}</button>
+          ))}
+        </div>}
+        {filtered.length === 0 && notes.length === 0 && <div style={{color:"var(--muted2)",fontSize:12,padding:"16px 0",textAlign:"center"}}>No vendor notes yet. Track returns, owed items, invoice issues here.</div>}
+        {filtered.length === 0 && notes.length > 0 && <div style={{color:"var(--muted2)",fontSize:12,padding:"16px 0",textAlign:"center"}}>No notes match this filter.</div>}
+        {filtered.map(n => (
+          <div key={n.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",background:n.resolved?"rgba(22,163,74,.03)":"var(--surface)",border:"1px solid "+(n.resolved?"rgba(22,163,74,.15)":"var(--border)"),borderRadius:10,marginBottom:6,opacity:n.resolved?0.7:1}}>
+            <input type="checkbox" checked={n.resolved} onChange={() => toggleResolved(n.id)} style={{marginTop:3,cursor:"pointer",width:16,height:16,accentColor:"var(--green)"}} />
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                <span style={{fontSize:11,fontWeight:700,color:"var(--blue)",background:"rgba(37,99,235,.08)",padding:"1px 8px",borderRadius:8}}>{n.vendor}</span>
+                <span style={{fontSize:10,color:"var(--muted2)"}}>{new Date(n.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
+              </div>
+              {editId === n.id ? (
+                <div style={{display:"flex",gap:6,marginTop:4}}>
+                  <input value={editText} onChange={e => setEditText(e.target.value)} onKeyDown={e => e.key === "Enter" && saveEdit(n.id)} style={{flex:1,fontSize:12,padding:"5px 8px"}} />
+                  <button className="btn small primary" style={{fontSize:10}} onClick={() => saveEdit(n.id)}>Save</button>
+                  <button className="btn small" style={{fontSize:10}} onClick={() => setEditId(null)}>Cancel</button>
+                </div>
+              ) : (
+                <div style={{fontSize:13,color:n.resolved?"var(--muted2)":"var(--text)",textDecoration:n.resolved?"line-through":"none",lineHeight:1.4,whiteSpace:"pre-wrap"}}>{n.text}</div>
+              )}
+            </div>
+            <div style={{display:"flex",gap:4,flexShrink:0}}>
+              {editId !== n.id && <button className="btn small" onClick={() => { setEditId(n.id); setEditText(n.text); }} style={{fontSize:10,padding:"2px 8px"}}>Edit</button>}
+              <button className="btn small danger" onClick={() => deleteNote(n.id)} style={{fontSize:10,padding:"2px 8px"}}>&times;</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
       <div className="vendor-section">
         <div>
           <div className="qr-box">
@@ -6014,7 +6081,7 @@ export default function App() {
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
-          {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} />}
+          {isAdmin && adminTab==="vendor" && <AdminVendor notifications={notifications} setNotifications={setNotifications} toast={toast} settings={settings} vendorNotes={vendorNotes} setVendorNotes={setVendorNotes} />}
           {isAdmin && adminTab==="promo" && <AdminPromo employees={employees} promos={promos} setPromos={setPromos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} vendorReps={vendorReps} setVendorReps={setVendorReps} vendorNotes={vendorNotes} setVendorNotes={setVendorNotes} toast={toast} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
