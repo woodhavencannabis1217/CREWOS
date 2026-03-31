@@ -5710,7 +5710,7 @@ export default function App() {
         firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
       }
     });
-  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings, promos, creditSubmissions]);
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings, promos, creditSubmissions, vendorReps, vendorNotes, taskTypes]);
 
   // Pull data from Firebase on load + poll for changes
   useEffect(() => {
