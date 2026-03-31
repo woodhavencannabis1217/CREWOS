@@ -5378,19 +5378,25 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
         const today = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
         // Credit is due starting the day AFTER the promo end date
         const isDuePast = (endDate) => { const d = new Date(endDate + "T23:59:59"); const next = new Date(d); next.setDate(next.getDate()+1); const nextStr = next.getFullYear()+"-"+String(next.getMonth()+1).padStart(2,"0")+"-"+String(next.getDate()).padStart(2,"0"); return today >= nextStr; };
-        const expiredPromos = announcements.filter(a => a.vendor && a.endDate && a.discountPct && isDuePast(a.endDate));
+        const expiredPromos = announcements.filter(a => a.vendor && a.endDate && a.discountPct && isDuePast(a.endDate) && !a.creditDismissed);
         if (expiredPromos.length === 0) return null;
         const unsettled = expiredPromos.filter(a => !a.creditSettled);
         const settled = expiredPromos.filter(a => a.creditSettled);
         return (
           <div style={{marginBottom:14,padding:14,background:"rgba(234,179,8,.06)",border:"1px solid rgba(234,179,8,.25)",borderRadius:12}}>
-            <div style={{fontSize:13,fontWeight:700,color:"#b45309",marginBottom:10}}>Promo Credits Due</div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#b45309"}}>Promo Credits Due</div>
+              <button className="btn small" style={{fontSize:10,padding:"2px 10px"}} onClick={() => { expiredPromos.forEach(a => { setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, creditDismissed: true} : x)); }); }}>Dismiss All</button>
+            </div>
             {unsettled.map(a => (
               <div key={a.id} style={{padding:10,background:"var(--surface)",borderRadius:8,border:"1px solid var(--border)",marginBottom:8}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
-                  <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
-                  <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
+                    <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
+                    <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
+                  </div>
+                  <span onClick={() => setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, creditDismissed: true} : x))} style={{cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--muted2)",padding:"2px 6px",borderRadius:6,flexShrink:0}} onMouseOver={e => e.target.style.color="var(--red)"} onMouseOut={e => e.target.style.color="var(--muted2)"}>&times;</span>
                 </div>
                 {creditInputId === a.id ? (
                   <div style={{display:"flex",gap:6,marginTop:8,alignItems:"center"}}>
@@ -5411,12 +5417,15 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
             ))}
             {settled.map(a => (
               <div key={a.id} style={{padding:10,background:"rgba(22,163,74,.04)",borderRadius:8,border:"1px solid rgba(22,163,74,.2)",marginBottom:8}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                  <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
-                  <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
-                  <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
-                  <span style={{fontSize:11,fontWeight:600,color:"var(--green)"}}>${a.creditAmount}</span>
-                  <span style={{fontSize:10,background:"rgba(22,163,74,.1)",color:"var(--green)",padding:"2px 8px",borderRadius:6,fontWeight:600}}>Settled</span>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{fontWeight:600,fontSize:13}}>{a.vendor}</span>
+                    <span style={{fontSize:11,color:"var(--muted2)"}}>{a.discountPct}% off</span>
+                    <span style={{fontSize:11,color:"var(--muted2)"}}>{fmtDate(a.startDate)} - {fmtDate(a.endDate)}</span>
+                    <span style={{fontSize:11,fontWeight:600,color:"var(--green)"}}>${a.creditAmount}</span>
+                    <span style={{fontSize:10,background:"rgba(22,163,74,.1)",color:"var(--green)",padding:"2px 8px",borderRadius:6,fontWeight:600}}>Settled</span>
+                  </div>
+                  <span onClick={() => setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, creditDismissed: true} : x))} style={{cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--muted2)",padding:"2px 6px",borderRadius:6,flexShrink:0}} onMouseOver={e => e.target.style.color="var(--red)"} onMouseOut={e => e.target.style.color="var(--muted2)"}>&times;</span>
                 </div>
               </div>
             ))}
