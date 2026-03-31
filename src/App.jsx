@@ -3931,15 +3931,6 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
               </div>
             );
           })()}
-          {deliveryLog.length>0 && <div style={{marginTop:16}}>
-            <div className="sec-head">Delivery Log ({deliveryLog.length})</div>
-            {deliveryLog.slice(0,10).map(d => (
-              <div className="vendor-entry" key={d.id}>
-                <div style={{fontWeight:500,fontSize:13}}>{d.company}</div>
-                <div style={{fontSize:11,color:"var(--muted2)",marginTop:4}}>{d.time}</div>
-              </div>
-            ))}
-          </div>}
         </div>
         <div>
           <div className="sec-head">Delivery Form Fields</div>
@@ -3960,6 +3951,53 @@ function AdminVendor({ notifications, setNotifications, toast, settings }) {
         </div>
       </div>
       <InvoiceVerifier toast={toast} />
+      {deliveryLog.length>0 && <DeliveryLogSection deliveryLog={deliveryLog} setDeliveryLog={setDeliveryLog} toast={toast} />}
+    </div>
+  );
+}
+
+function DeliveryLogSection({ deliveryLog, setDeliveryLog, toast }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? deliveryLog : deliveryLog.slice(0, 20);
+
+  const deleteEntry = (id) => {
+    const updated = deliveryLog.filter(d => d.id !== id);
+    setDeliveryLog(updated);
+    localStorage.setItem("crewos_deliveries", JSON.stringify(updated));
+    toast.show("Delivery removed", "warning");
+  };
+
+  const clearAll = () => {
+    setDeliveryLog([]);
+    localStorage.setItem("crewos_deliveries", "[]");
+    toast.show("Delivery log cleared", "warning");
+  };
+
+  return (
+    <div style={{marginTop:24}}>
+      <div onClick={() => setExpanded(!expanded)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",padding:"10px 14px",background:"var(--surface)",borderRadius:expanded?"12px 12px 0 0":"12px",border:"1px solid var(--border)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:13,fontWeight:600}}>Delivery Log</span>
+          <span style={{fontSize:11,color:"var(--muted2)",background:"var(--bg4)",padding:"2px 8px",borderRadius:10}}>{deliveryLog.length}</span>
+        </div>
+        <span style={{fontSize:12,color:"var(--muted2)",transition:"transform .2s",transform:expanded?"rotate(180deg)":"rotate(0)"}}>&#9660;</span>
+      </div>
+      {expanded && <div style={{border:"1px solid var(--border)",borderTop:"none",borderRadius:"0 0 12px 12px",padding:14}}>
+        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+          <button className="btn small danger" onClick={clearAll}>Clear All</button>
+        </div>
+        {visible.map(d => (
+          <div className="vendor-entry" key={d.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontWeight:500,fontSize:13}}>{d.company}</div>
+              <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>{d.time}</div>
+            </div>
+            <button className="btn small danger" onClick={() => deleteEntry(d.id)} style={{fontSize:11,padding:"3px 10px"}}>&times;</button>
+          </div>
+        ))}
+        {deliveryLog.length > 20 && !showAll && <button className="btn small" style={{marginTop:8,width:"100%"}} onClick={() => setShowAll(true)}>Show All ({deliveryLog.length})</button>}
+      </div>}
     </div>
   );
 }
