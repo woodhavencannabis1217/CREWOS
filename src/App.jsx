@@ -3220,7 +3220,8 @@ function AdminPromo({ employees, promos, setPromos, creditSubmissions, setCredit
     setForm(f => ({ ...f, assignedStaff: f.assignedStaff.includes(id) ? f.assignedStaff.filter(s => s !== id) : [...f.assignedStaff, id] }));
   };
 
-  const today = new Date().toISOString().split("T")[0];
+  const _now = new Date();
+  const today = _now.getFullYear() + "-" + String(_now.getMonth()+1).padStart(2,"0") + "-" + String(_now.getDate()).padStart(2,"0");
 
   const getPromoStatus = (p) => {
     if (p.status === "completed") return "completed";
@@ -3667,7 +3668,8 @@ function EmpCredits({ employee, promos, creditSubmissions, setCreditSubmissions,
   const [photo, setPhoto] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const today = new Date().toISOString().split("T")[0];
+  const _now2 = new Date();
+  const today = _now2.getFullYear() + "-" + String(_now2.getMonth()+1).padStart(2,"0") + "-" + String(_now2.getDate()).padStart(2,"0");
 
   // Show promos assigned to this employee that have ended and need credit submission
   const myPromos = promos.filter(p =>
@@ -5265,10 +5267,13 @@ function AnnouncementsPanel({ announcements, setAnnouncements, user, employees, 
           </div>
         </div>
       )}
-      {/* Promo Credits Due */}
+      {/* Promo Credits Due — only show day AFTER promo ends (local time) */}
       {(user.role === "admin" || user.name === "Admin") && (() => {
-        const today = new Date().toISOString().split("T")[0];
-        const expiredPromos = announcements.filter(a => a.vendor && a.endDate && a.discountPct && a.endDate < today);
+        const now = new Date();
+        const today = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
+        // Credit is due starting the day AFTER the promo end date
+        const isDuePast = (endDate) => { const d = new Date(endDate + "T23:59:59"); const next = new Date(d); next.setDate(next.getDate()+1); const nextStr = next.getFullYear()+"-"+String(next.getMonth()+1).padStart(2,"0")+"-"+String(next.getDate()).padStart(2,"0"); return today >= nextStr; };
+        const expiredPromos = announcements.filter(a => a.vendor && a.endDate && a.discountPct && isDuePast(a.endDate));
         if (expiredPromos.length === 0) return null;
         const unsettled = expiredPromos.filter(a => !a.creditSettled);
         const settled = expiredPromos.filter(a => a.creditSettled);
