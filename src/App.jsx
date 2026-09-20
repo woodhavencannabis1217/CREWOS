@@ -59,13 +59,42 @@ async function firebasePush(dbUrl, path, data) {
   } catch { return null; }
 }
 
+// ─── FIREBASE CONNECTION HEALTH ─────────────────────────────────────────────
+// Firebase failures used to be swallowed silently, so a locked-down database
+// (expired rules -> 401 Permission denied) looked identical to working sync
+// while every device quietly drifted apart. Track the last result and surface it.
+const fbHealth = { ok: true, error: "", listeners: new Set() };
+function setFbHealth(ok, error) {
+  if (fbHealth.ok === ok && fbHealth.error === error) return;
+  fbHealth.ok = ok;
+  fbHealth.error = error;
+  fbHealth.listeners.forEach((fn) => fn({ ok, error }));
+}
+function useFbHealth() {
+  const [state, setState] = useState({ ok: fbHealth.ok, error: fbHealth.error });
+  useEffect(() => {
+    fbHealth.listeners.add(setState);
+    return () => { fbHealth.listeners.delete(setState); };
+  }, []);
+  return state;
+}
+
 async function firebaseGet(dbUrl, path) {
   if (!dbUrl) return null;
   const cleanUrl = dbUrl.replace(/\/+$/, "");
   try {
     const res = await fetch(cleanUrl + "/" + path + ".json");
-    return await res.json();
-  } catch { return null; }
+    const json = await res.json();
+    if (!res.ok || (json && json.error)) {
+      setFbHealth(false, (json && json.error) || ("HTTP " + res.status));
+      return null;
+    }
+    setFbHealth(true, "");
+    return json;
+  } catch (e) {
+    setFbHealth(false, e && e.message ? e.message : "Network error");
+    return null;
+  }
 }
 
 async function firebaseSet(dbUrl, path, data) {
@@ -73,8 +102,17 @@ async function firebaseSet(dbUrl, path, data) {
   const cleanUrl = dbUrl.replace(/\/+$/, "");
   try {
     const res = await fetch(cleanUrl + "/" + path + ".json", { method: "PUT", body: JSON.stringify(data) });
-    return await res.json();
-  } catch { return null; }
+    const json = await res.json();
+    if (!res.ok || (json && json.error)) {
+      setFbHealth(false, (json && json.error) || ("HTTP " + res.status));
+      return null;
+    }
+    setFbHealth(true, "");
+    return json;
+  } catch (e) {
+    setFbHealth(false, e && e.message ? e.message : "Network error");
+    return null;
+  }
 }
 
 // ─── STYLES (LIGHT THEME) ───────────────────────────────────────────────────
@@ -107,6 +145,12 @@ body{background:var(--bg);color:var(--text);overflow-x:hidden}
 .user-info{display:flex;flex-direction:column}
 .user-name{font-size:13px;font-weight:500}
 .user-role{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.05em}
+
+/* OFFLINE / SYNC-FAILED BANNER */
+.fb-banner{background:rgba(220,38,38,.07);border-bottom:1px solid rgba(220,38,38,.2);color:var(--red);font-size:12px;line-height:1.5;padding:10px 20px;text-align:center}
+.fb-banner strong{font-weight:700}
+.fb-banner .fb-detail{display:block;font-size:11px;opacity:.8;margin-top:2px}
+.fb-banner-login{border:1px solid rgba(220,38,38,.2);border-radius:10px;margin-bottom:18px;text-align:left;padding:12px 14px}
 
 /* TABS */
 .tabs{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;padding:0 20px;gap:2px;overflow-x:auto;position:sticky;top:56px;z-index:99}
@@ -471,6 +515,21 @@ function useToast() {
   return { show, el };
 }
 
+// ─── SYNC-FAILED BANNER ──────────────────────────────────────────────────────
+// Shown wherever the app is running against a database it cannot reach, so a
+// device that is quietly on its own local copy says so instead of looking fine.
+function FbBanner({ login }) {
+  const health = useFbHealth();
+  if (health.ok) return null;
+  return (
+    <div className={"fb-banner" + (login ? " fb-banner-login" : "")}>
+      <strong>Not connected to the store.</strong> This device is using its own local copy —
+      staff, schedules and clock-ins here will not reach anyone else.
+      <span className="fb-detail">Sync error: {health.error} — check Firebase &rarr; Realtime Database &rarr; Rules.</span>
+    </div>
+  );
+}
+
 // ─── PIN LOGIN ───────────────────────────────────────────────────────────────
 function PinLogin({ onLogin, employees }) {
   const [pin, setPin] = useState([]);
@@ -501,6 +560,7 @@ function PinLogin({ onLogin, employees }) {
       <div className="login-box">
         <div className="login-logo"><span>Woodhaven</span><em>OS</em></div>
         <div className="login-sub">Enter your 4-digit PIN</div>
+        <FbBanner login />
         <div className="pin-dots" style={shake ? {animation:"shake .3s"} : {}}>
           {[0,1,2,3].map(i => (
             <div key={i} className={"pin-dot" + (pin.length > i ? (error ? " err" : " on") : "")} />
@@ -848,15 +908,13 @@ function calcShiftHours(start, end) {
 
 // ─── ADMIN: SCHEDULE ─────────────────────────────────────────────────────────
 // Flexible: each employee × each day has its own independent start/end time
-function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications }) {
+function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications, submittedWeeks, setSubmittedWeeks }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
-  // Schedule submission status per week
-  const [submittedWeeks, setSubmittedWeeks] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("crewos_submitted_weeks")) || {}; } catch { return {}; }
-  });
-  useEffect(() => { localStorage.setItem("crewos_submitted_weeks", JSON.stringify(submittedWeeks)); }, [submittedWeeks]);
+  // Schedule submission status per week — lives in App so it syncs to Firebase
+  // like the schedule itself; otherwise staff on their own phones always saw
+  // "not published yet" no matter what was published here.
   const isSubmitted = !!submittedWeeks[weekStart];
   const submittedAt = submittedWeeks[weekStart] || null;
 
@@ -4153,7 +4211,10 @@ async function geocodeAddress(address) {
   } catch { return null; }
 }
 
-function AdminSettings({ settings, setSettings }) {
+function AdminSettings({ settings, setSettings, toast }) {
+  const [testing, setTesting] = useState(false);
+  const [testedAt, setTestedAt] = useState(null);
+  const [lastTest, setLastTest] = useState(null); // { ok, msg }
   const [geoAddress, setGeoAddress] = useState(settings.geoAddress || "");
   const [geoStatus, setGeoStatus] = useState("");
   const [geoLoading, setGeoLoading] = useState(false);
@@ -4341,30 +4402,31 @@ function AdminSettings({ settings, setSettings }) {
             <div className="setting-sub">Required for vendor form to work from other devices (phones). Create a free Firebase project, enable Realtime Database, and paste the URL here.</div>
           </div>
           <input type="text" value={settings.firebaseUrl || ""} onChange={e => setSettings(s=>({...s,firebaseUrl:e.target.value.trim()}))} placeholder="https://your-project.firebaseio.com" />
-          {settings.firebaseUrl && <button className="btn primary small" style={{marginTop:8}} onClick={async () => {
-            const fbUrl = settings.firebaseUrl;
-            const pushData = { employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, _lastUpdated: Date.now(), _updatedBy: "admin_push" };
-            await firebaseSet(fbUrl, "crewos_data", pushData);
-            toast.show("All data pushed to Firebase!");
-          }}>Push All Data to Cloud Now</button>}
-          {settings.firebaseUrl && <button className="btn small" style={{marginTop:6}} onClick={async () => {
-            const fbUrl = settings.firebaseUrl;
-            const data = await firebaseGet(fbUrl, "crewos_data");
-            if (data && data.employees) {
-              setEmployees(data.employees);
-              if (data.schedule) setSchedule(data.schedule);
-              if (data.clockLogs) setClockLogs(data.clockLogs);
-              if (data.tasks) setTasks(data.tasks);
-              if (data.overrides) setOverrides(data.overrides);
-              if (data.drawerLogs) setDrawerLogs(data.drawerLogs);
-              if (data.shiftNotes) setShiftNotes(data.shiftNotes);
-              if (data.announcements) setAnnouncements(data.announcements);
-              toast.show("Data pulled from cloud!");
-            } else { toast.show("No data found in cloud", "error"); }
-          }}>Pull Data from Cloud</button>}
-          {settings.firebaseUrl && (
-            <div style={{fontSize:11,color:"var(--green)",background:"rgba(22,163,74,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(22,163,74,.15)"}}>
-              \u2713 Firebase connected! All data syncs across devices: employees, schedules, clock logs, tasks, payroll, and vendor deliveries.
+          {/* Sync is automatic (pull on load + poll, push on every change). The old
+              manual Push/Pull buttons referenced variables that did not exist in this
+              component and threw on click, so they are replaced by a real test. */}
+          {settings.firebaseUrl && <button className="btn primary small" style={{marginTop:8}} disabled={testing} onClick={async () => {
+            setTesting(true);
+            const data = await firebaseGet(settings.firebaseUrl, "crewos_data/_lastUpdated");
+            setTesting(false);
+            setTestedAt(Date.now());
+            if (fbHealth.ok) setLastTest({ ok: true, msg: data ? "Connected. Store data last updated " + new Date(data).toLocaleString() : "Connected. No data in the cloud yet \u2014 this device will upload its copy." });
+            else setLastTest({ ok: false, msg: fbHealth.error });
+          }}>{testing ? "Testing..." : "Test Connection"}</button>}
+          {settings.firebaseUrl && lastTest && (
+            <div style={lastTest.ok
+              ? {fontSize:11,color:"var(--green)",background:"rgba(22,163,74,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(22,163,74,.15)",lineHeight:1.6}
+              : {fontSize:11,color:"var(--red)",background:"rgba(220,38,38,.04)",padding:"8px 12px",borderRadius:8,border:"1px solid rgba(220,38,38,.2)",lineHeight:1.6}}>
+              {lastTest.ok ? "\u2713 " : "\u26a0 "}{lastTest.msg}
+              {!lastTest.ok && (
+                <div style={{marginTop:6}}>
+                  &ldquo;Permission denied&rdquo; means the database rules are locked. In the Firebase
+                  console open <strong>Realtime Database &rarr; Rules</strong>, set <code>.read</code> and
+                  <code> .write</code> to <code>true</code>, and Publish. Until then every device keeps its
+                  own separate copy of the data.
+                </div>
+              )}
+              {testedAt ? <div style={{marginTop:4,opacity:.7}}>Checked {new Date(testedAt).toLocaleTimeString()}</div> : null}
             </div>
           )}
           {!settings.firebaseUrl && (
@@ -4379,12 +4441,11 @@ function AdminSettings({ settings, setSettings }) {
 }
 
 // ─── EMPLOYEE: MY SCHEDULE ───────────────────────────────────────────────────
-function EmpSchedule({ employee, schedule }) {
+function EmpSchedule({ employee, schedule, submittedWeeks }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
 
-  // Check if schedule is submitted for this week
-  let isPublished = false;
-  try { const sw = JSON.parse(localStorage.getItem("crewos_submitted_weeks")) || {}; isPublished = !!sw[weekStart]; } catch {}
+  // Check if schedule is submitted for this week (synced from the admin device)
+  const isPublished = !!(submittedWeeks && submittedWeeks[weekStart]);
 
   // Scan ALL schedule keys for this week to find shifts assigned to this employee
   const myShifts = [];
@@ -5620,6 +5681,7 @@ export default function App() {
   const [creditSubmissions, setCreditSubmissions] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_credit_submissions"))||[]; } catch { return []; } });
   const [vendorReps, setVendorReps] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_reps"))||{}; } catch { return {}; } });
   const [vendorNotes, setVendorNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_vendor_notes"))||[]; } catch { return []; } });
+  const [submittedWeeks, setSubmittedWeeks] = useState(() => { try { return JSON.parse(localStorage.getItem("crewos_submitted_weeks"))||{}; } catch { return {}; } });
 
   // Persist
   useEffect(() => { localStorage.setItem("crewos_employees", JSON.stringify(employees)); }, [employees]);
@@ -5637,6 +5699,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("crewos_credit_submissions", JSON.stringify(creditSubmissions)); }, [creditSubmissions]);
   useEffect(() => { localStorage.setItem("crewos_vendor_reps", JSON.stringify(vendorReps)); }, [vendorReps]);
   useEffect(() => { localStorage.setItem("crewos_vendor_notes", JSON.stringify(vendorNotes)); }, [vendorNotes]);
+  useEffect(() => { localStorage.setItem("crewos_submitted_weeks", JSON.stringify(submittedWeeks)); }, [submittedWeeks]);
 
   // ─── FIREBASE FULL SYNC ──────────────────────────────────────────────────
   const [fbSeenIds] = useState(() => new Set());
@@ -5656,6 +5719,7 @@ export default function App() {
     ["shiftNotes", shiftNotes],
     ["announcements", announcements],
     ["taskTypes", taskTypes],
+    ["submittedWeeks", submittedWeeks],
   ];
 
   useEffect(() => {
@@ -5665,7 +5729,7 @@ export default function App() {
     if (!fbSyncRef.current.firstPullDone) return;
     const pushData = {
       employees, schedule, clockLogs, tasks, overrides,
-      notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps, vendorNotes,
+      notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps, vendorNotes, submittedWeeks,
       settings_data: { ...settings, firebaseUrl: undefined },
       _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
     };
@@ -5710,7 +5774,7 @@ export default function App() {
         firebaseSet(fbUrl, "crewos_data", queued).then(() => { fbSyncRef.current.pushing = false; });
       }
     });
-  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings, promos, creditSubmissions, vendorReps, vendorNotes, taskTypes]);
+  }, [employees, schedule, clockLogs, tasks, overrides, notifications, drawerLogs, shiftNotes, announcements, settings, promos, creditSubmissions, vendorReps, vendorNotes, taskTypes, submittedWeeks]);
 
   // Pull data from Firebase on load + poll for changes
   useEffect(() => {
@@ -5752,6 +5816,7 @@ export default function App() {
           if (data.creditSubmissions && JSON.stringify(data.creditSubmissions) !== JSON.stringify(creditSubmissions)) setCreditSubmissions(data.creditSubmissions);
           if (data.vendorReps && JSON.stringify(data.vendorReps) !== JSON.stringify(vendorReps)) setVendorReps(data.vendorReps);
           if (data.vendorNotes && JSON.stringify(data.vendorNotes) !== JSON.stringify(vendorNotes)) setVendorNotes(data.vendorNotes);
+          if (data.submittedWeeks && JSON.stringify(data.submittedWeeks) !== JSON.stringify(submittedWeeks)) setSubmittedWeeks(data.submittedWeeks);
         }
       } else if (isFirstPull) {
         // No data on Firebase yet — allow pushes to start
@@ -6074,6 +6139,8 @@ export default function App() {
           </div>
         </div>
 
+        <FbBanner />
+
         <div className="tabs">
           {(isAdmin?adminTabs:empTabs).map(([k,l]) => (
             <div key={k} className={"tab"+((isAdmin?adminTab:empTab)===k?" on":"")} onClick={() => isAdmin?setAdminTab(k):setEmpTab(k)}>
@@ -6086,7 +6153,7 @@ export default function App() {
         <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} taskTypes={taskTypes} tasks={tasks} settings={settings} />
 
         <div className="body">
-          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} />}
+          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} submittedWeeks={submittedWeeks} setSubmittedWeeks={setSubmittedWeeks} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
@@ -6094,9 +6161,9 @@ export default function App() {
           {isAdmin && adminTab==="promo" && <AdminPromo employees={employees} promos={promos} setPromos={setPromos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} vendorReps={vendorReps} setVendorReps={setVendorReps} vendorNotes={vendorNotes} setVendorNotes={setVendorNotes} toast={toast} />}
           {isAdmin && adminTab==="drawer" && <AdminDrawer drawerLogs={drawerLogs} />}
           {isAdmin && adminTab==="alerts" && <AdminAlerts notifications={notifications} setNotifications={setNotifications} />}
-          {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} />}
+          {isAdmin && adminTab==="settings" && <AdminSettings settings={settings} setSettings={setSettings} toast={toast} />}
 
-          {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} />}
+          {!isAdmin && empTab==="schedule" && <EmpSchedule employee={user} schedule={schedule} submittedWeeks={submittedWeeks} />}
           {!isAdmin && empTab==="hours" && <EmpHours employee={user} clockLogs={clockLogs} onClockIn={handleClockIn} onClockOut={handleClockOut} handoffNotes={getHandoffNotes()} onDismissNote={dismissNote} isClockedIn={isClockedIn} geoBlocked={geoBlocked} geoBlockMsg={geoBlockMsg} geoChecking={geoChecking} onDismissGeo={() => setGeoBlocked(false)} nfcEnabled={settings.nfcEnabled || false} />}
           {!isAdmin && empTab==="tasks" && <EmpTasks employee={user} tasks={tasks} schedule={schedule} firebaseUrl={settings.firebaseUrl} announcements={announcements} settings={settings} />}
           {!isAdmin && empTab==="credits" && <EmpCredits employee={user} promos={promos} creditSubmissions={creditSubmissions} setCreditSubmissions={setCreditSubmissions} toast={toast} />}
