@@ -49,12 +49,87 @@ function calcHours(logs) {
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+// ─── STORE SIGN-IN (Firebase Auth over REST) ────────────────────────────────
+// The database only answers the one shared store account. It is entered once per
+// device and remembered; staff still log in with their PINs. Until a device is
+// signed in, requests go out without a token (which works only while the rules
+// are open), so devices can be signed in ahead of the rules being locked.
+// This is the project's public Web API key (Firebase console -> Project settings).
+const FIREBASE_API_KEY = "AIzaSyDhJ_Mi_FcvoEptXHfsZ_R0pMdpc0vwS-g";
+const STORE_AUTH_KEY = "crewos_store_auth";
+const storeAuth = {
+  session: (() => { try { return JSON.parse(localStorage.getItem(STORE_AUTH_KEY)) || null; } catch { return null; } })(),
+  refreshing: null,
+  listeners: new Set(),
+};
+function saveStoreSession(session) {
+  storeAuth.session = session;
+  try {
+    if (session) localStorage.setItem(STORE_AUTH_KEY, JSON.stringify(session));
+    else localStorage.removeItem(STORE_AUTH_KEY);
+  } catch {}
+  storeAuth.listeners.forEach((fn) => fn(session));
+}
+function useStoreSession() {
+  const [session, setSession] = useState(storeAuth.session);
+  useEffect(() => {
+    storeAuth.listeners.add(setSession);
+    return () => { storeAuth.listeners.delete(setSession); };
+  }, []);
+  return session;
+}
+async function storeSignIn(email, password) {
+  if (!FIREBASE_API_KEY) throw new Error("Store sign-in is not set up in this version of the app yet.");
+  let res, json;
+  try {
+    res = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + FIREBASE_API_KEY, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    });
+    json = await res.json();
+  } catch { throw new Error("No internet connection. Try again."); }
+  if (!res.ok) {
+    const code = (json && json.error && json.error.message) || "";
+    if (/INVALID_LOGIN_CREDENTIALS|INVALID_PASSWORD|EMAIL_NOT_FOUND|INVALID_EMAIL/.test(code)) throw new Error("Wrong email or password.");
+    if (/TOO_MANY_ATTEMPTS/.test(code)) throw new Error("Too many tries. Wait a few minutes and try again.");
+    throw new Error(code || ("HTTP " + res.status));
+  }
+  saveStoreSession({ email: json.email, uid: json.localId, idToken: json.idToken, refreshToken: json.refreshToken, expiresAt: Date.now() + Number(json.expiresIn) * 1000 });
+}
+// ID tokens last an hour; swap in a fresh one shortly before expiry.
+async function storeToken() {
+  const s = storeAuth.session;
+  if (!s) return "";
+  if (s.expiresAt - Date.now() > 5 * 60 * 1000) return s.idToken;
+  if (!storeAuth.refreshing) {
+    storeAuth.refreshing = (async () => {
+      try {
+        const res = await fetch("https://securetoken.googleapis.com/v1/token?key=" + FIREBASE_API_KEY, {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "grant_type=refresh_token&refresh_token=" + encodeURIComponent(s.refreshToken),
+        });
+        const json = await res.json();
+        if (res.ok) saveStoreSession({ ...s, idToken: json.id_token, refreshToken: json.refresh_token, expiresAt: Date.now() + Number(json.expires_in) * 1000 });
+        // Password changed or account removed: this device has to sign in again.
+        else if (res.status === 400) saveStoreSession(null);
+      } catch {}
+      storeAuth.refreshing = null;
+    })();
+  }
+  await storeAuth.refreshing;
+  return storeAuth.session ? storeAuth.session.idToken : "";
+}
+
 // ─── FIREBASE HELPERS ───────────────────────────────────────────────────────
+async function fbFetch(dbUrl, path, opts) {
+  const token = await storeToken();
+  return fetch(dbUrl.replace(/\/+$/, "") + "/" + path + ".json" + (token ? "?auth=" + encodeURIComponent(token) : ""), opts);
+}
+
 async function firebasePush(dbUrl, path, data) {
   if (!dbUrl) return null;
-  const cleanUrl = dbUrl.replace(/\/+$/, "");
   try {
-    const res = await fetch(cleanUrl + "/" + path + ".json", { method: "POST", body: JSON.stringify(data) });
+    const res = await fbFetch(dbUrl, path, { method: "POST", body: JSON.stringify(data) });
     return await res.json();
   } catch { return null; }
 }
@@ -81,9 +156,8 @@ function useFbHealth() {
 
 async function firebaseGet(dbUrl, path) {
   if (!dbUrl) return null;
-  const cleanUrl = dbUrl.replace(/\/+$/, "");
   try {
-    const res = await fetch(cleanUrl + "/" + path + ".json");
+    const res = await fbFetch(dbUrl, path);
     const json = await res.json();
     if (!res.ok || (json && json.error)) {
       setFbHealth(false, (json && json.error) || ("HTTP " + res.status));
@@ -99,9 +173,8 @@ async function firebaseGet(dbUrl, path) {
 
 async function firebaseSet(dbUrl, path, data) {
   if (!dbUrl) return null;
-  const cleanUrl = dbUrl.replace(/\/+$/, "");
   try {
-    const res = await fetch(cleanUrl + "/" + path + ".json", { method: "PUT", body: JSON.stringify(data) });
+    const res = await fbFetch(dbUrl, path, { method: "PUT", body: JSON.stringify(data) });
     const json = await res.json();
     if (!res.ok || (json && json.error)) {
       setFbHealth(false, (json && json.error) || ("HTTP " + res.status));
@@ -151,6 +224,13 @@ body{background:var(--bg);color:var(--text);overflow-x:hidden}
 .fb-banner strong{font-weight:700}
 .fb-banner .fb-detail{display:block;font-size:11px;opacity:.8;margin-top:2px}
 .fb-banner-login{border:1px solid rgba(220,38,38,.2);border-radius:10px;margin-bottom:18px;text-align:left;padding:12px 14px}
+.store-signin{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-width:320px;text-align:left}
+.fb-banner:not(.fb-banner-login) .store-signin{margin-left:auto;margin-right:auto}
+.store-signin input{width:100%}
+.store-signin-ok{font-size:12px;color:var(--green);font-weight:600}
+.store-signin-err{font-size:11px;color:var(--red)}
+.login-store{margin-top:14px;font-size:11px;color:var(--muted);text-align:center}
+.login-store a{color:var(--muted2);cursor:pointer;text-decoration:underline}
 
 /* TABS */
 .tabs{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;padding:0 20px;gap:2px;overflow-x:auto;position:sticky;top:56px;z-index:99}
@@ -199,7 +279,7 @@ body{background:var(--bg);color:var(--text);overflow-x:hidden}
 .btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 
 /* INPUTS */
-select,input[type=text],input[type=time],input[type=number],input[type=email],textarea{
+select,input[type=text],input[type=time],input[type=number],input[type=email],input[type=password],textarea{
   background:var(--bg2);border:1px solid var(--border2);border-radius:8px;
   padding:8px 12px;font-size:13px;color:var(--text);font-family:var(--font);
   outline:none;width:100%;transition:border .15s
@@ -520,18 +600,60 @@ function useToast() {
 // device that is quietly on its own local copy says so instead of looking fine.
 function FbBanner({ login }) {
   const health = useFbHealth();
+  const session = useStoreSession();
   if (health.ok) return null;
+  const denied = /permission denied|401/i.test(health.error);
   return (
     <div className={"fb-banner" + (login ? " fb-banner-login" : "")}>
       <strong>Not connected to the store.</strong> This device is using its own local copy —
       staff, schedules and clock-ins here will not reach anyone else.
-      <span className="fb-detail">Sync error: {health.error} — check Firebase &rarr; Realtime Database &rarr; Rules.</span>
+      {denied && !session
+        ? <span className="fb-detail">This device needs the store sign-in. Ask the owner to enter it below.</span>
+        : denied
+          ? <span className="fb-detail">The store sign-in on this device was not accepted. Sign out and sign in again.</span>
+          : <span className="fb-detail">Sync error: {health.error}</span>}
+      {denied && <StoreSignIn />}
     </div>
+  );
+}
+
+// ─── STORE SIGN-IN FORM ──────────────────────────────────────────────────────
+// One shared store account, typed once per device by the owner.
+function StoreSignIn() {
+  const session = useStoreSession();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (session) {
+    return (
+      <div className="store-signin">
+        <span className="store-signin-ok">{"✓"} Store signed in as {session.email}</span>
+        <button className="btn small" onClick={() => saveStoreSession(null)}>Sign out this device</button>
+      </div>
+    );
+  }
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true); setError("");
+    try { await storeSignIn(email.trim(), password); setPassword(""); }
+    catch (err) { setError(err.message); }
+    setBusy(false);
+  };
+  return (
+    <form className="store-signin" onSubmit={submit}>
+      <input type="email" autoComplete="username" placeholder="Store email" value={email} onChange={e => setEmail(e.target.value)} />
+      <input type="password" autoComplete="current-password" placeholder="Store password" value={password} onChange={e => setPassword(e.target.value)} />
+      <button className="btn primary small" type="submit" disabled={busy || !email || !password}>{busy ? "Signing in..." : "Sign in this device"}</button>
+      {error && <div className="store-signin-err">{error}</div>}
+    </form>
   );
 }
 
 // ─── PIN LOGIN ───────────────────────────────────────────────────────────────
 function PinLogin({ onLogin, employees }) {
+  const session = useStoreSession();
+  const [showStore, setShowStore] = useState(false);
   const [pin, setPin] = useState([]);
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
@@ -577,6 +699,11 @@ function PinLogin({ onLogin, employees }) {
         </div>
         <div className="pin-error">{error}</div>
         {/* PINs are private - each employee receives their PIN from admin */}
+        <div className="login-store">
+          {session ? <span>{"✓"} This device is signed in to the store</span>
+            : <a onClick={() => setShowStore(s => !s)}>Owner: sign this device in to the store</a>}
+          {showStore && !session && <StoreSignIn />}
+        </div>
       </div>
     </div>
   );
@@ -2690,6 +2817,7 @@ function NfcClockPage() {
         <div className="nfc-box">
           <div className="nfc-logo"><span>Woodhaven</span><em>OS</em></div>
           <div className="nfc-error">{errorMsg}</div>
+          <FbBanner login />
           <button className="btn" style={{marginTop:16,width:"100%"}} onClick={() => { setPhase("pin"); setPin([]); setErrorMsg(""); }}>Try Again</button>
         </div>
       </div>
@@ -3920,8 +4048,7 @@ function AdminVendor({ notifications, setNotifications, toast, settings, vendorN
   // Save vendor form fields to Firebase so the phone can load them
   useEffect(() => {
     if (fbUrl && fields.length > 0) {
-      const cleanUrl = fbUrl.replace(/\/+$/, "");
-      fetch(cleanUrl + "/vendor_fields.json", { method: "PUT", body: JSON.stringify(fields) }).catch(() => {});
+      fbFetch(fbUrl, "vendor_fields", { method: "PUT", body: JSON.stringify(fields) }).catch(() => {});
     }
   }, [fields, fbUrl]);
 
@@ -4010,27 +4137,26 @@ function AdminVendor({ notifications, setNotifications, toast, settings, vendorN
                       localStorage.setItem("crewos_pending_deliveries", JSON.stringify(updated));
                       // Also remove from Firebase pending_delivery AND deliveries
                       if (fbUrl) {
-                        const base = fbUrl.replace(/\/+$/, "");
                         // Remove from pending_delivery
-                        fetch(base + "/pending_delivery.json")
+                        fbFetch(fbUrl, "pending_delivery")
                           .then(r => r.json())
                           .then(data => {
                             if (data && typeof data === "object") {
                               Object.entries(data).forEach(([key, val]) => {
                                 if (val && val.id === d.id) {
-                                  fetch(base + "/pending_delivery/" + key + ".json", { method: "DELETE" }).catch(() => {});
+                                  fbFetch(fbUrl, "pending_delivery/" + key, { method: "DELETE" }).catch(() => {});
                                 }
                               });
                             }
                           }).catch(() => {});
                         // Remove from deliveries path too
-                        fetch(base + "/deliveries.json")
+                        fbFetch(fbUrl, "deliveries")
                           .then(r => r.json())
                           .then(data => {
                             if (data && typeof data === "object") {
                               Object.entries(data).forEach(([key, val]) => {
                                 if (val && val.id === d.id) {
-                                  fetch(base + "/deliveries/" + key + ".json", { method: "DELETE" }).catch(() => {});
+                                  fbFetch(fbUrl, "deliveries/" + key, { method: "DELETE" }).catch(() => {});
                                 }
                               });
                             }
@@ -4046,9 +4172,8 @@ function AdminVendor({ notifications, setNotifications, toast, settings, vendorN
                   localStorage.setItem("crewos_pending_deliveries", "[]");
                   // Clear all from Firebase (both paths)
                   if (fbUrl) {
-                    const base = fbUrl.replace(/\/+$/, "");
-                    fetch(base + "/pending_delivery.json", { method: "DELETE" }).catch(() => {});
-                    fetch(base + "/deliveries.json", { method: "DELETE" }).catch(() => {});
+                    fbFetch(fbUrl, "pending_delivery", { method: "DELETE" }).catch(() => {});
+                    fbFetch(fbUrl, "deliveries", { method: "DELETE" }).catch(() => {});
                   }
                   toast.show("All active deliveries cleared", "warning");
                   setDeliveryLog(prev => [...prev]);
@@ -4420,10 +4545,8 @@ function AdminSettings({ settings, setSettings, toast }) {
               {lastTest.ok ? "\u2713 " : "\u26a0 "}{lastTest.msg}
               {!lastTest.ok && (
                 <div style={{marginTop:6}}>
-                  &ldquo;Permission denied&rdquo; means the database rules are locked. In the Firebase
-                  console open <strong>Realtime Database &rarr; Rules</strong>, set <code>.read</code> and
-                  <code> .write</code> to <code>true</code>, and Publish. Until then every device keeps its
-                  own separate copy of the data.
+                  &ldquo;Permission denied&rdquo; means this device is not signed in to the store.
+                  Sign it in below. Until then it keeps its own separate copy of the data.
                 </div>
               )}
               {testedAt ? <div style={{marginTop:4,opacity:.7}}>Checked {new Date(testedAt).toLocaleTimeString()}</div> : null}
@@ -4434,6 +4557,11 @@ function AdminSettings({ settings, setSettings, toast }) {
               <strong>Without Firebase:</strong> Each device has its own data. Employees added on one device won&apos;t appear on another.
             </div>
           )}
+          <div>
+            <div className="setting-label">Store sign-in</div>
+            <div className="setting-sub">The database only answers devices signed in with the store account. Enter it once per device; staff still use their PINs.</div>
+            <StoreSignIn />
+          </div>
         </div>
       </div>
     </div>
