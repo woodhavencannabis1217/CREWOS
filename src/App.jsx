@@ -61,7 +61,7 @@ const FIREBASE_API_KEY = "AIzaSyDhJ_Mi_FcvoEptXHfsZ_R0pMdpc0vwS-g";
 // droplet service /opt/woodhaven_hours builds and sends the weekly "Last week
 // payroll" email from woodhavencannabis@gmail.com. The server caps every
 // employee at HOURS_CAP and only ever sends an hours list, never free text.
-const HOURS_API = "https://hours.159-223-111-237.sslip.io/api/send";
+const HOURS_API = "https://hours.159-223-111-237.sslip.io/api";
 const HOURS_KEY = "bb5217d8d2010b412c030f49005d1b459b42fa2aef9dd025";
 const HOURS_CAP = 40;
 const HOURS_DEFAULT_TO = "kwilson@beyondhcm.co";
@@ -1045,7 +1045,7 @@ function calcShiftHours(start, end) {
 
 // ─── ADMIN: SCHEDULE ─────────────────────────────────────────────────────────
 // Flexible: each employee × each day has its own independent start/end time
-function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications, submittedWeeks, setSubmittedWeeks }) {
+function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications, submittedWeeks, setSubmittedWeeks, settings, setSettings }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
 
@@ -1313,14 +1313,19 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   // ── Email Hours: the weekly payroll email, straight from this week's grid ──
   const [hoursModal, setHoursModal] = useState(false);
   const [hoursSending, setHoursSending] = useState(false);
-  const [hoursAddr, setHoursAddr] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("crewos_hours_email"));
-      if (saved && typeof saved.to === "string") return saved;
-    } catch { /* fall through */ }
-    return { to: HOURS_DEFAULT_TO, cc: HOURS_DEFAULT_CC };
-  });
-  useEffect(() => { localStorage.setItem("crewos_hours_email", JSON.stringify(hoursAddr)); }, [hoursAddr]);
+  // The addresses live in settings, which sync through Firebase, so a change made on
+  // one device shows up on every device. Beyond's addresses are the defaults until
+  // Chris edits them; "Reset" puts the defaults back.
+  const hoursAddr = {
+    to: typeof settings?.hoursEmailTo === "string" ? settings.hoursEmailTo : HOURS_DEFAULT_TO,
+    cc: typeof settings?.hoursEmailCc === "string" ? settings.hoursEmailCc : HOURS_DEFAULT_CC,
+  };
+  const setHoursAddr = (fn) => {
+    const next = fn(hoursAddr);
+    setSettings(s => ({ ...s, hoursEmailTo: next.to, hoursEmailCc: next.cc }));
+  };
+  const hoursAddrIsDefault = hoursAddr.to === HOURS_DEFAULT_TO && hoursAddr.cc === HOURS_DEFAULT_CC;
+  const resetHoursAddr = () => setSettings(s => { const n = { ...s }; delete n.hoursEmailTo; delete n.hoursEmailCc; return n; });
 
   // Same per-employee total the payroll snapshot uses, then capped at HOURS_CAP.
   const weekHoursRows = () => {
@@ -1342,31 +1347,64 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const fmtHrs = h => (h === Math.floor(h) ? String(h) : h.toFixed(1));
   const weekLabel = formatDate(weekStart) + " – " + formatDate(addDays(weekStart, 6));
 
+  // Scheduling: "later" posts send_at as store-local time (the droplet treats it as
+  // New York) and the droplet's per-minute cron sends it, so this device can be off.
+  const tomorrow8 = () => {
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + "T08:00";
+  };
+  const [hoursWhen, setHoursWhen] = useState("now");
+  const [hoursAt, setHoursAt] = useState(tomorrow8);
+  const [hoursQueue, setHoursQueue] = useState([]);
+  const fmtWhen = iso => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  const hoursApi = async (path, payload) => {
+    const r = await fetch(HOURS_API + path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: HOURS_KEY, ...payload }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+    return j;
+  };
+  const refreshHoursQueue = () => hoursApi("/queue", {}).then(j => setHoursQueue(j.jobs.filter(x => x.status === "pending"))).catch(() => setHoursQueue([]));
+  const openHoursModal = () => { setHoursWhen("now"); setHoursAt(tomorrow8()); setHoursModal(true); refreshHoursQueue(); };
+
   const sendHoursEmail = async () => {
     const rows = weekHoursRows();
     if (rows.length === 0) { toast.show("No hours on this week's schedule", "warning"); return; }
     if (!hoursAddr.to.trim()) { toast.show("Enter an email address first", "warning"); return; }
+    const later = hoursWhen === "later";
+    if (later && (!hoursAt || new Date(hoursAt) <= new Date())) { toast.show("Pick a time in the future", "warning"); return; }
     setHoursSending(true);
     try {
-      const r = await fetch(HOURS_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key: HOURS_KEY,
-          to: hoursAddr.to,
-          cc: hoursAddr.cc,
-          week: weekLabel,
-          employees: rows.map(x => ({ name: x.name, hours: x.hours })),
-        }),
+      const j = await hoursApi("/send", {
+        to: hoursAddr.to,
+        cc: hoursAddr.cc,
+        week: weekLabel,
+        send_at: later ? hoursAt : "now",
+        employees: rows.map(x => ({ name: x.name, hours: x.hours })),
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
-      toast.show("Hours emailed to " + j.to.join(", ") + (j.replied_in_thread ? " (in the payroll thread)" : ""));
+      if (j.scheduled) {
+        toast.show("Scheduled for " + j.send_at_label + " to " + j.job.to.join(", "));
+      } else {
+        toast.show("Hours emailed to " + j.to.join(", ") + (j.replied_in_thread ? " (in the payroll thread)" : ""));
+      }
       setHoursModal(false);
     } catch (e) {
       toast.show("Email failed: " + e.message, "warning");
     } finally {
       setHoursSending(false);
+    }
+  };
+
+  const cancelHoursJob = async (id) => {
+    try {
+      await hoursApi("/cancel", { id });
+      toast.show("Scheduled email cancelled", "warning");
+      refreshHoursQueue();
+    } catch (e) {
+      toast.show("Cancel failed: " + e.message, "warning");
     }
   };
 
@@ -1378,7 +1416,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         <button className="btn small" onClick={() => setWeekStart(addDays(weekStart, 7))}>Next &#8594;</button>
         {!isSubmitted && <button className="btn small amber" onClick={copyPrevWeek}>Copy Last Week</button>}
         {!isSubmitted && <button className="btn small danger" onClick={clearWeek}>Clear</button>}
-        <button className="btn small primary" onClick={() => setHoursModal(true)} title={"Email this week's hours (capped at " + HOURS_CAP + "h each)"}>&#9993; Email Hours</button>
+        <button className="btn small primary" onClick={openHoursModal} title={"Email this week's hours (capped at " + HOURS_CAP + "h each)"}>&#9993; Email Hours</button>
       </div>
 
       {hoursModal && (() => {
@@ -1391,13 +1429,41 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                 <input type="text" value={hoursAddr.to} onChange={e => setHoursAddr(a => ({ ...a, to: e.target.value }))} placeholder="name@company.com" /></div>
               <div className="form-group"><label>CC (optional, comma-separated)</label>
                 <input type="text" value={hoursAddr.cc} onChange={e => setHoursAddr(a => ({ ...a, cc: e.target.value }))} placeholder="a@b.com, c@d.com" /></div>
-              <div style={{fontSize:11,color:"var(--muted)",marginBottom:6}}>Sent from woodhavencannabis@gmail.com. Each employee is capped at {HOURS_CAP} hours.</div>
+              <div style={{fontSize:11,color:"var(--muted)",marginBottom:6,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <span style={{flex:1}}>Sent from woodhavencannabis@gmail.com. Each employee is capped at {HOURS_CAP} hours. Addresses are saved for next time on every device.</span>
+                {!hoursAddrIsDefault && <button className="btn small ghost" onClick={resetHoursAddr} title={"Back to " + HOURS_DEFAULT_TO}>Reset to Beyond</button>}
+              </div>
               <pre style={{fontSize:12,background:"var(--bg3, var(--bg))",border:"1px solid var(--border2)",borderRadius:8,padding:"10px 12px",margin:0,whiteSpace:"pre-wrap",fontFamily:"var(--font)"}}>
 {"Last week payroll\n\n"}{rows.length === 0 ? "(no hours on this week's schedule)" : rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours" + (x.capped ? "   (scheduled " + fmtHrs(x.raw) + ", capped)" : "")).join("\n")}
               </pre>
+              <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginTop:14,fontSize:12}}>
+                <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                  <input type="radio" name="hoursWhen" checked={hoursWhen === "now"} onChange={() => setHoursWhen("now")} /> Send now
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                  <input type="radio" name="hoursWhen" checked={hoursWhen === "later"} onChange={() => setHoursWhen("later")} /> Schedule for
+                </label>
+                <input type="datetime-local" value={hoursAt} disabled={hoursWhen !== "later"}
+                  onChange={e => setHoursAt(e.target.value)} onFocus={() => setHoursWhen("later")}
+                  style={{fontSize:12,padding:"5px 8px",opacity:hoursWhen === "later" ? 1 : .5}} />
+              </div>
+              {hoursWhen === "later" && <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>Sends these numbers as shown, even if the schedule changes later. Store time (New York).</div>}
+              {hoursQueue.length > 0 && (
+                <div style={{marginTop:14,padding:"10px 12px",background:"rgba(217,119,6,.06)",border:"1px solid rgba(217,119,6,.2)",borderRadius:8,fontSize:12}}>
+                  <div style={{fontWeight:600,color:"var(--amber)",marginBottom:6}}>Already scheduled</div>
+                  {hoursQueue.map(j => (
+                    <div key={j.id} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0"}}>
+                      <span style={{flex:1}}>{fmtWhen(j.send_at)} &rarr; {j.to.join(", ")} <span style={{color:"var(--muted)"}}>({j.week}, {j.lines.length} people)</span></span>
+                      <button className="btn small danger" onClick={() => cancelHoursJob(j.id)}>Cancel</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="modal-actions">
-                <button className="btn" disabled={hoursSending} onClick={() => setHoursModal(false)}>Cancel</button>
-                <button className="btn primary" disabled={hoursSending || rows.length === 0} onClick={sendHoursEmail}>{hoursSending ? "Sending…" : "Send Email"}</button>
+                <button className="btn" disabled={hoursSending} onClick={() => setHoursModal(false)}>Close</button>
+                <button className="btn primary" disabled={hoursSending || rows.length === 0} onClick={sendHoursEmail}>
+                  {hoursSending ? "Working…" : hoursWhen === "later" ? "Schedule Email" : "Send Now"}
+                </button>
               </div>
             </div>
           </div>
@@ -6375,7 +6441,7 @@ export default function App() {
         <AnnouncementsPanel announcements={announcements} setAnnouncements={setAnnouncements} user={user} employees={employees} toast={toast} taskTypes={taskTypes} tasks={tasks} settings={settings} />
 
         <div className="body">
-          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} submittedWeeks={submittedWeeks} setSubmittedWeeks={setSubmittedWeeks} />}
+          {isAdmin && adminTab==="schedule" && <AdminSchedule employees={employees} schedule={schedule} setSchedule={setSchedule} toast={toast} notifications={notifications} setNotifications={setNotifications} submittedWeeks={submittedWeeks} setSubmittedWeeks={setSubmittedWeeks} settings={settings} setSettings={setSettings} />}
           {isAdmin && adminTab==="employees" && <AdminEmployees employees={employees} setEmployees={setEmployees} toast={toast} />}
           {isAdmin && adminTab==="payroll" && <AdminPayroll employees={employees} setEmployees={setEmployees} clockLogs={clockLogs} overrides={overrides} setOverrides={setOverrides} toast={toast} />}
           {isAdmin && adminTab==="tasks" && <AdminTasks tasks={tasks} setTasks={setTasks} taskTypes={taskTypes} setTaskTypes={setTaskTypes} toast={toast} />}
