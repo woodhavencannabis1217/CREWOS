@@ -56,6 +56,16 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 // are open), so devices can be signed in ahead of the rules being locked.
 // This is the project's public Web API key (Firebase console -> Project settings).
 const FIREBASE_API_KEY = "AIzaSyDhJ_Mi_FcvoEptXHfsZ_R0pMdpc0vwS-g";
+
+// "Email Hours" on the Schedule tab. A GitHub Pages app cannot send Gmail, so the
+// droplet service /opt/woodhaven_hours builds and sends the weekly "Last week
+// payroll" email from woodhavencannabis@gmail.com. The server caps every
+// employee at HOURS_CAP and only ever sends an hours list, never free text.
+const HOURS_API = "https://hours.159-223-111-237.sslip.io/api/send";
+const HOURS_KEY = "bb5217d8d2010b412c030f49005d1b459b42fa2aef9dd025";
+const HOURS_CAP = 40;
+const HOURS_DEFAULT_TO = "kwilson@beyondhcm.co";
+const HOURS_DEFAULT_CC = "fharris@beyondhcm.co, implementation@beyondhcm.co, crobinson@beyondhcm.co";
 const STORE_AUTH_KEY = "crewos_store_auth";
 const storeAuth = {
   session: (() => { try { return JSON.parse(localStorage.getItem(STORE_AUTH_KEY)) || null; } catch { return null; } })(),
@@ -1300,6 +1310,66 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
 
   const scheduledCount = () => getScheduledEmps().size;
 
+  // ── Email Hours: the weekly payroll email, straight from this week's grid ──
+  const [hoursModal, setHoursModal] = useState(false);
+  const [hoursSending, setHoursSending] = useState(false);
+  const [hoursAddr, setHoursAddr] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("crewos_hours_email"));
+      if (saved && typeof saved.to === "string") return saved;
+    } catch { /* fall through */ }
+    return { to: HOURS_DEFAULT_TO, cc: HOURS_DEFAULT_CC };
+  });
+  useEffect(() => { localStorage.setItem("crewos_hours_email", JSON.stringify(hoursAddr)); }, [hoursAddr]);
+
+  // Same per-employee total the payroll snapshot uses, then capped at HOURS_CAP.
+  const weekHoursRows = () => {
+    const map = {};
+    shifts.forEach(shift => {
+      for (let d = 0; d < 7; d++) {
+        const c = getCell(shift.id, d);
+        if (c.empId) map[c.empId] = (map[c.empId] || 0) + calcShiftHours(c.start, c.end);
+      }
+    });
+    return nonAdmin
+      .filter(e => map[e.id] > 0)
+      .map(e => {
+        const raw = Math.round(map[e.id] * 10) / 10;
+        const hours = Math.min(HOURS_CAP, raw);
+        return { name: e.name, raw, hours, capped: raw > HOURS_CAP };
+      });
+  };
+  const fmtHrs = h => (h === Math.floor(h) ? String(h) : h.toFixed(1));
+  const weekLabel = formatDate(weekStart) + " – " + formatDate(addDays(weekStart, 6));
+
+  const sendHoursEmail = async () => {
+    const rows = weekHoursRows();
+    if (rows.length === 0) { toast.show("No hours on this week's schedule", "warning"); return; }
+    if (!hoursAddr.to.trim()) { toast.show("Enter an email address first", "warning"); return; }
+    setHoursSending(true);
+    try {
+      const r = await fetch(HOURS_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: HOURS_KEY,
+          to: hoursAddr.to,
+          cc: hoursAddr.cc,
+          week: weekLabel,
+          employees: rows.map(x => ({ name: x.name, hours: x.hours })),
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+      toast.show("Hours emailed to " + j.to.join(", ") + (j.replied_in_thread ? " (in the payroll thread)" : ""));
+      setHoursModal(false);
+    } catch (e) {
+      toast.show("Email failed: " + e.message, "warning");
+    } finally {
+      setHoursSending(false);
+    }
+  };
+
   return (
     <div>
       <div className="week-nav">
@@ -1308,7 +1378,31 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         <button className="btn small" onClick={() => setWeekStart(addDays(weekStart, 7))}>Next &#8594;</button>
         {!isSubmitted && <button className="btn small amber" onClick={copyPrevWeek}>Copy Last Week</button>}
         {!isSubmitted && <button className="btn small danger" onClick={clearWeek}>Clear</button>}
+        <button className="btn small primary" onClick={() => setHoursModal(true)} title={"Email this week's hours (capped at " + HOURS_CAP + "h each)"}>&#9993; Email Hours</button>
       </div>
+
+      {hoursModal && (() => {
+        const rows = weekHoursRows();
+        return (
+          <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !hoursSending && setHoursModal(false)}>
+            <div className="modal" style={{maxWidth:480}}>
+              <div className="modal-title">Email Hours &mdash; {weekLabel}</div>
+              <div className="form-group"><label>To</label>
+                <input type="text" value={hoursAddr.to} onChange={e => setHoursAddr(a => ({ ...a, to: e.target.value }))} placeholder="name@company.com" /></div>
+              <div className="form-group"><label>CC (optional, comma-separated)</label>
+                <input type="text" value={hoursAddr.cc} onChange={e => setHoursAddr(a => ({ ...a, cc: e.target.value }))} placeholder="a@b.com, c@d.com" /></div>
+              <div style={{fontSize:11,color:"var(--muted)",marginBottom:6}}>Sent from woodhavencannabis@gmail.com. Each employee is capped at {HOURS_CAP} hours.</div>
+              <pre style={{fontSize:12,background:"var(--bg3, var(--bg))",border:"1px solid var(--border2)",borderRadius:8,padding:"10px 12px",margin:0,whiteSpace:"pre-wrap",fontFamily:"var(--font)"}}>
+{"Last week payroll\n\n"}{rows.length === 0 ? "(no hours on this week's schedule)" : rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours" + (x.capped ? "   (scheduled " + fmtHrs(x.raw) + ", capped)" : "")).join("\n")}
+              </pre>
+              <div className="modal-actions">
+                <button className="btn" disabled={hoursSending} onClick={() => setHoursModal(false)}>Cancel</button>
+                <button className="btn primary" disabled={hoursSending || rows.length === 0} onClick={sendHoursEmail}>{hoursSending ? "Sending…" : "Send Email"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {isSubmitted && (
         <div style={{marginBottom:14,padding:"14px 18px",background:"rgba(22,163,74,.06)",borderRadius:12,border:"1px solid rgba(22,163,74,.15)",fontSize:12,color:"var(--green)",display:"flex",alignItems:"center",gap:10}}>
