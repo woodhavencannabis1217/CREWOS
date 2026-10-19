@@ -61,6 +61,17 @@ const FIREBASE_API_KEY = "AIzaSyDhJ_Mi_FcvoEptXHfsZ_R0pMdpc0vwS-g";
 // droplet service /opt/woodhaven_hours builds and sends the weekly "Last week
 // payroll" email from woodhavencannabis@gmail.com. The server caps every
 // employee at HOURS_CAP and only ever sends an hours list, never free text.
+// Firebase pushes are stamped with this so a device can tell its own push from
+// another device's. It used to be the user id, but two devices both logged in as
+// Admin then ignored each other's changes until a reload.
+const DEVICE_ID = (() => {
+  try {
+    let d = localStorage.getItem("crewos_device_id");
+    if (!d) { d = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); localStorage.setItem("crewos_device_id", d); }
+    return d;
+  } catch { return "device"; }
+})();
+
 const HOURS_API = "https://hours.159-223-111-237.sslip.io/api";
 const HOURS_KEY = "bb5217d8d2010b412c030f49005d1b459b42fa2aef9dd025";
 const HOURS_CAP = 40;
@@ -6018,7 +6029,7 @@ export default function App() {
       employees, schedule, clockLogs, tasks, overrides,
       notifications, drawerLogs, shiftNotes, announcements, taskTypes, promos, creditSubmissions, vendorReps, vendorNotes, submittedWeeks,
       settings_data: { ...settings, firebaseUrl: undefined },
-      _lastUpdated: Date.now(), _updatedBy: user?.id || "unknown"
+      _lastUpdated: Date.now(), _updatedBy: DEVICE_ID
     };
     // If already pushing, queue this push so it runs after the current one finishes
     if (fbSyncRef.current.pushing) {
@@ -6076,7 +6087,7 @@ export default function App() {
       if (data && typeof data === "object" && data._lastUpdated) {
         // On first pull, always apply data (to bootstrap new devices)
         // On subsequent pulls, only apply if newer and not from us
-        const shouldApply = isFirstPull || (data._lastUpdated > lastPulled && data._updatedBy !== (user?.id || "unknown"));
+        const shouldApply = isFirstPull || (data._lastUpdated > lastPulled && data._updatedBy !== DEVICE_ID);
         if (isFirstPull) {
           isFirstPull = false;
           // Mark first pull done so pushes can start (after a short delay to let state settle)
