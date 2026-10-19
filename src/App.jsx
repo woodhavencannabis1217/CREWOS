@@ -309,7 +309,7 @@ select{cursor:pointer;-webkit-appearance:none;appearance:none;background-image:u
 .shift-cell{min-height:44px;display:flex;flex-direction:column;gap:3px;padding:2px}
 .shift-toggle{display:flex;align-items:center;gap:4px}
 input.cell-time{font-size:11px;padding:3px 6px;border-radius:5px;width:100%}
-.week-nav{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.week-nav{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
 .week-label{font-size:14px;font-weight:500;flex:1;text-align:center}
 .sched-rule{margin-top:14px;padding:12px 16px;background:rgba(217,119,6,.06);border-radius:10px;border:1px solid rgba(217,119,6,.15);font-size:12px;color:var(--amber);display:flex;align-items:center;gap:10px}
 
