@@ -1340,8 +1340,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
       .filter(e => map[e.id] > 0)
       .map(e => {
         const raw = Math.round(map[e.id] * 10) / 10;
-        const hours = Math.min(HOURS_CAP, raw);
-        return { name: e.name, raw, hours, capped: raw > HOURS_CAP };
+        return { name: e.name, hours: Math.min(HOURS_CAP, raw) };
       });
   };
   const fmtHrs = h => (h === Math.floor(h) ? String(h) : h.toFixed(1));
@@ -1430,11 +1429,11 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
               <div className="form-group"><label>CC (optional, comma-separated)</label>
                 <input type="text" value={hoursAddr.cc} onChange={e => setHoursAddr(a => ({ ...a, cc: e.target.value }))} placeholder="a@b.com, c@d.com" /></div>
               <div style={{fontSize:11,color:"var(--muted)",marginBottom:6,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <span style={{flex:1}}>Sent from woodhavencannabis@gmail.com. Each employee is capped at {HOURS_CAP} hours. Addresses are saved for next time on every device.</span>
+                <span style={{flex:1}}>Sent from woodhavencannabis@gmail.com exactly as shown below. Addresses are saved for next time on every device.</span>
                 {!hoursAddrIsDefault && <button className="btn small ghost" onClick={resetHoursAddr} title={"Back to " + HOURS_DEFAULT_TO}>Reset to Beyond</button>}
               </div>
               <pre style={{fontSize:12,background:"var(--bg3, var(--bg))",border:"1px solid var(--border2)",borderRadius:8,padding:"10px 12px",margin:0,whiteSpace:"pre-wrap",fontFamily:"var(--font)"}}>
-{"Last week payroll\n\n"}{rows.length === 0 ? "(no hours on this week's schedule)" : rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours" + (x.capped ? "   (scheduled " + fmtHrs(x.raw) + ", capped)" : "")).join("\n")}
+{"Last week payroll\n\n"}{rows.length === 0 ? "(no hours on this week's schedule)" : rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours").join("\n")}
               </pre>
               <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginTop:14,fontSize:12}}>
                 <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
