@@ -1366,6 +1366,11 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
   const [hoursWhen, setHoursWhen] = useState("now");
   const [hoursAt, setHoursAt] = useState(tomorrow8);
   const [hoursQueue, setHoursQueue] = useState([]);
+  const [hoursBody, setHoursBody] = useState("");
+  const defaultHoursBody = () => {
+    const rows = weekHoursRows();
+    return "Last week payroll\n\n" + rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours").join("\n");
+  };
   const fmtWhen = iso => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
   const hoursApi = async (path, payload) => {
@@ -1378,12 +1383,13 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
     return j;
   };
   const refreshHoursQueue = () => hoursApi("/queue", {}).then(j => setHoursQueue(j.jobs.filter(x => x.status === "pending"))).catch(() => setHoursQueue([]));
-  const openHoursModal = () => { setHoursWhen("now"); setHoursAt(tomorrow8()); setHoursModal(true); refreshHoursQueue(); };
+  const openHoursModal = () => { setHoursWhen("now"); setHoursAt(tomorrow8()); setHoursBody(defaultHoursBody()); setHoursModal(true); refreshHoursQueue(); };
 
   const sendHoursEmail = async () => {
     const rows = weekHoursRows();
     if (rows.length === 0) { toast.show("No hours on this week's schedule", "warning"); return; }
     if (!hoursAddr.to.trim()) { toast.show("Enter an email address first", "warning"); return; }
+    if (!hoursBody.trim()) { toast.show("The message is empty", "warning"); return; }
     const later = hoursWhen === "later";
     if (later && (!hoursAt || new Date(hoursAt) <= new Date())) { toast.show("Pick a time in the future", "warning"); return; }
     setHoursSending(true);
@@ -1394,6 +1400,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         week: weekLabel,
         send_at: later ? hoursAt : "now",
         employees: rows.map(x => ({ name: x.name, hours: x.hours })),
+        body: hoursBody,
       });
       if (j.scheduled) {
         toast.show("Scheduled for " + j.send_at_label + " to " + j.job.to.join(", "));
@@ -1443,9 +1450,17 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                 <span style={{flex:1}}>Sent from woodhavencannabis@gmail.com exactly as shown below. Addresses are saved for next time on every device.</span>
                 {!hoursAddrIsDefault && <button className="btn small ghost" onClick={resetHoursAddr} title={"Back to " + HOURS_DEFAULT_TO}>Reset to Beyond</button>}
               </div>
-              <pre style={{fontSize:12,background:"var(--bg3, var(--bg))",border:"1px solid var(--border2)",borderRadius:8,padding:"10px 12px",margin:0,whiteSpace:"pre-wrap",fontFamily:"var(--font)"}}>
-{"Last week payroll\n\n"}{rows.length === 0 ? "(no hours on this week's schedule)" : rows.map(x => x.name + ": " + fmtHrs(x.hours) + " hours").join("\n")}
-              </pre>
+              {rows.length === 0
+                ? <div style={{fontSize:12,color:"var(--muted)",padding:"10px 12px",border:"1px solid var(--border2)",borderRadius:8}}>(no hours on this week's schedule)</div>
+                : <>
+                    <textarea value={hoursBody} onChange={e => setHoursBody(e.target.value)} rows={Math.max(6, hoursBody.split("\n").length + 1)}
+                      style={{width:"100%",boxSizing:"border-box",fontSize:12,background:"var(--bg3, var(--bg))",border:"1px solid var(--border2)",borderRadius:8,padding:"10px 12px",margin:0,fontFamily:"var(--font)",resize:"vertical",color:"inherit"}} />
+                    {hoursBody !== defaultHoursBody() && (
+                      <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
+                        <button className="btn small ghost" onClick={() => setHoursBody(defaultHoursBody())}>Reset message</button>
+                      </div>
+                    )}
+                  </>}
               <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginTop:14,fontSize:12}}>
                 <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
                   <input type="radio" name="hoursWhen" checked={hoursWhen === "now"} onChange={() => setHoursWhen("now")} /> Send now
