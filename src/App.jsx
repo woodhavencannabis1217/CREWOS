@@ -75,7 +75,7 @@ const DEVICE_ID = (() => {
 const HOURS_API = "https://hours.159-223-111-237.sslip.io/api";
 const HOURS_KEY = "bb5217d8d2010b412c030f49005d1b459b42fa2aef9dd025";
 const HOURS_CAP = 40;
-const HOURS_DEFAULT_TO = "kwilson@beyondhcm.co";
+const HOURS_DEFAULT_TO = "ssummitt@beyondhcm.co";
 const HOURS_DEFAULT_CC = "fharris@beyondhcm.co, implementation@beyondhcm.co, crobinson@beyondhcm.co";
 const STORE_AUTH_KEY = "crewos_store_auth";
 const storeAuth = {
