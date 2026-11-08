@@ -1453,7 +1453,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
     const d = new Date(); d.setDate(d.getDate() + 1);
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + "T08:00";
   };
-  const [hoursWhen, setHoursWhen] = useState("now");
+  const [hoursWhen, setHoursWhen] = useState("later");
   const [hoursAt, setHoursAt] = useState(tomorrow8);
   const [hoursQueue, setHoursQueue] = useState([]);
   const [hoursBody, setHoursBody] = useState("");
@@ -1473,7 +1473,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
     return j;
   };
   const refreshHoursQueue = () => hoursApi("/queue", {}).then(j => setHoursQueue(j.jobs.filter(x => x.status === "pending"))).catch(() => setHoursQueue([]));
-  const openHoursModal = () => { setHoursWhen("now"); setHoursAt(tomorrow8()); setHoursBody(defaultHoursBody()); setHoursModal(true); refreshHoursQueue(); };
+  const openHoursModal = () => { setHoursWhen("later"); setHoursAt(tomorrow8()); setHoursBody(defaultHoursBody()); setHoursModal(true); refreshHoursQueue(); };
 
   const sendHoursEmail = async () => {
     const rows = weekHoursRows();
