@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Woodhaven OS — Clock In/Out</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8faf9;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.box{text-align:center;max-width:320px}
+.logo{font-size:28px;font-weight:700;margin-bottom:8px}
+.logo span{color:#16a34a}
+.logo em{color:#94a3b8;font-style:normal;font-weight:400;font-size:16px}
+.msg{font-size:14px;color:#64748b;margin-bottom:20px}
+.spinner{width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#16a34a;border-radius:50%;animation:spin .6s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+<script>
+// This page is opened by NFC tap on iPhone/Android.
+// It reads the Firebase URL from localStorage (saved by admin settings)
+// and redirects to the NFC clock page.
+(function(){
+  // Try to get Firebase URL from settings saved on this device
+  var fbUrl = "";
+  try {
+    var settings = JSON.parse(localStorage.getItem("crewos_settings"));
+    if (settings && settings.firebaseUrl) fbUrl = settings.firebaseUrl;
+  } catch(e){}
+
+  // Also check if there's a ?fb= param in URL (e.g. clock.html?fb=...)
+  try {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("fb")) fbUrl = decodeURIComponent(params.get("fb"));
+  } catch(e){}
+
+  if (fbUrl) {
+    // Redirect to main app with NFC clock hash
+    var base = window.location.pathname.replace(/clock\.html.*$/, "");
+    window.location.replace(base + "#/nfc-clock?fb=" + encodeURIComponent(fbUrl));
+  } else {
+    // No Firebase URL found — try hardcoded fallback (set during build from settings)
+    // Show message asking user to open main app first
+    document.addEventListener("DOMContentLoaded", function(){
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("noconfig").style.display = "block";
+    });
+  }
+})();
+</script>
+</head>
+<body>
+<div class="box">
+  <div class="logo"><span>Woodhaven</span><em>OS</em></div>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div class="msg">Opening clock-in...</div>
+  </div>
+  <div id="noconfig" style="display:none">
+    <div class="msg" style="color:#dc2626;margin-bottom:12px">Setup needed</div>
+    <div class="msg">Open the main WoodhavenOS app on this phone first and log in, so it can save your connection settings. Then try tapping the NFC sticker again.</div>
+    <a href="./" style="display:inline-block;margin-top:16px;padding:10px 24px;background:#16a34a;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">Open WoodhavenOS</a>
+  </div>
+</div>
+</body>
+</html>
