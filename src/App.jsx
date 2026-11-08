@@ -77,6 +77,95 @@ const HOURS_KEY = "bb5217d8d2010b412c030f49005d1b459b42fa2aef9dd025";
 const HOURS_CAP = 40;
 const HOURS_DEFAULT_TO = "ssummitt@beyondhcm.co";
 const HOURS_DEFAULT_CC = "fharris@beyondhcm.co, implementation@beyondhcm.co, crobinson@beyondhcm.co";
+// Vendor pop-ups. The list is the droplet's store_events.json — the same one
+// the store computer's delivery board shows — served by the hours service as
+// /api/popups so the Schedule tab can show which days a rep will be in the
+// store while the week is being built. Fetched once per page load, shared by
+// every schedule view, refetched after five minutes.
+const POPUPS_TTL_MS = 5 * 60 * 1000;
+let popupsCache = null;
+let popupsCacheAt = 0;
+let popupsPromise = null;
+function fetchPopups() {
+  if (popupsCache && Date.now() - popupsCacheAt < POPUPS_TTL_MS) return Promise.resolve(popupsCache);
+  if (!popupsPromise) {
+    popupsPromise = fetch(HOURS_API + "/popups", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: HOURS_KEY }),
+    })
+      .then(r => r.json())
+      .then(j => {
+        if (!j.ok) throw new Error(j.error || "pop-ups unavailable");
+        popupsCache = Array.isArray(j.events) ? j.events : [];
+        popupsCacheAt = Date.now();
+        return popupsCache;
+      })
+      .finally(() => { popupsPromise = null; });
+  }
+  return popupsPromise;
+}
+function usePopups() {
+  const [popups, setPopups] = useState(popupsCache || []);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchPopups()
+      .then(p => { if (alive) { setPopups(p); setError(null); } })
+      .catch(e => { if (alive) setError((e && e.message) || "offline"); });
+    return () => { alive = false; };
+  }, []);
+  return { popups, popupsError: error };
+}
+function popupsOn(popups, iso) {
+  return (popups || []).filter(p => p.date === iso).sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+}
+function popupSpan(p) {
+  return [p.start_pretty, p.end_pretty].filter(Boolean).join("–");
+}
+// Small purple tag under a day heading. `onDark` is for the navy table header.
+function PopupChip({ p, onDark }) {
+  return (
+    <div title={[p.who, p.note].filter(Boolean).join("\n")} style={{
+      marginTop: 4, padding: "2px 6px", borderRadius: 6, fontSize: 10, fontWeight: 600, lineHeight: 1.3,
+      background: onDark ? "rgba(255,255,255,.18)" : "rgba(124,58,237,.12)",
+      color: onDark ? "#fff" : "var(--purple)",
+      border: "1px solid " + (onDark ? "rgba(255,255,255,.3)" : "rgba(124,58,237,.3)"),
+      whiteSpace: "normal", textAlign: "center",
+    }}>
+      &#127914; {p.title}{popupSpan(p) ? " " + popupSpan(p) : ""}
+    </div>
+  );
+}
+// The week's pop-ups in one line above the grid, so they are seen before any shift is placed.
+function PopupWeekStrip({ popups, popupsError, weekStart }) {
+  const week = [];
+  for (let i = 0; i < 7; i++) {
+    const iso = addDays(weekStart, i);
+    popupsOn(popups, iso).forEach(p => week.push({ ...p, dayName: DAY_FULL[i], dateLabel: formatDate(iso) }));
+  }
+  if (popupsError && week.length === 0) {
+    return (
+      <div style={{marginBottom:12,padding:"8px 14px",background:"rgba(217,119,6,.06)",borderRadius:10,border:"1px solid rgba(217,119,6,.15)",fontSize:11,color:"var(--amber)"}}>
+        &#9888; Couldn&rsquo;t load the pop-up list ({popupsError}). Check the delivery board for pop-ups this week.
+      </div>
+    );
+  }
+  if (week.length === 0) {
+    return <div style={{marginBottom:10,fontSize:11,color:"var(--muted2)"}}>&#127914; No vendor pop-ups booked this week.</div>;
+  }
+  return (
+    <div style={{marginBottom:12,padding:"10px 14px",background:"rgba(124,58,237,.05)",borderRadius:10,border:"1px solid rgba(124,58,237,.15)"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"var(--purple)",marginBottom:6}}>&#127914; Pop-ups this week</div>
+      {week.map(p => (
+        <div key={p.id} style={{fontSize:12,color:"var(--text)",marginBottom:3}}>
+          <strong>{p.dayName} {p.dateLabel}</strong> &middot; {p.title}{popupSpan(p) ? " " + popupSpan(p) : ""}
+          {p.who && <span style={{color:"var(--muted2)"}}> &middot; {p.who}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const STORE_AUTH_KEY = "crewos_store_auth";
 const storeAuth = {
   session: (() => { try { return JSON.parse(localStorage.getItem(STORE_AUTH_KEY)) || null; } catch { return null; } })(),
@@ -1059,6 +1148,7 @@ function calcShiftHours(start, end) {
 function AdminSchedule({ employees, schedule, setSchedule, toast, notifications, setNotifications, submittedWeeks, setSubmittedWeeks, settings, setSettings }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
   const nonAdmin = employees.filter(e => e.role !== "admin");
+  const { popups, popupsError } = usePopups();
 
   // Schedule submission status per week — lives in App so it syncs to Firebase
   // like the schedule itself; otherwise staff on their own phones always saw
@@ -1509,14 +1599,17 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
         </div>
       )}
 
+      <PopupWeekStrip popups={popups} popupsError={popupsError} weekStart={weekStart} />
+
       <div className="sched-wrap">
         <table className="sched-tbl">
           <thead>
             <tr style={{background:"#2c3e7f"}}>
               {DAYS.map((d, i) => (
-                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:130}}>
+                <th key={d} style={{background:"#2c3e7f",color:"#fff",textAlign:"center",fontSize:11,minWidth:130,verticalAlign:"top"}}>
                   {DAY_FULL[i]}<br/>
                   <span style={{fontWeight:400,fontSize:10,opacity:.8}}>({formatDate(addDays(weekStart, i))})</span>
+                  {popupsOn(popups, addDays(weekStart, i)).map(p => <PopupChip key={p.id} p={p} onDark />)}
                 </th>
               ))}
               <th style={{background:"#2c3e7f",color:"#fff",width:40}}></th>
@@ -1598,7 +1691,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
             }
           });
           blocks.sort((a, b) => a.start.localeCompare(b.start));
-          return { dayName, dateLabel, blocks };
+          return { dayName, dateLabel, blocks, popups: popupsOn(popups, addDays(weekStart, di)) };
         });
         return (
           <div className="card" style={{padding:0,overflow:"hidden",marginTop:16,marginBottom:16}}>
@@ -1608,6 +1701,7 @@ function AdminSchedule({ employees, schedule, setSchedule, toast, notifications,
                   <div style={{textAlign:"center",padding:"12px 6px 8px",borderBottom:"1px solid var(--border)",background:"var(--bg4)"}}>
                     <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{day.dayName}</div>
                     <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>({day.dateLabel})</div>
+                    {day.popups.map(p => <PopupChip key={p.id} p={p} />)}
                   </div>
                   <div style={{padding:"8px 6px"}}>
                     {day.blocks.length === 0 ? (
@@ -4756,6 +4850,7 @@ function AdminSettings({ settings, setSettings, toast }) {
 // ─── EMPLOYEE: MY SCHEDULE ───────────────────────────────────────────────────
 function EmpSchedule({ employee, schedule, submittedWeeks }) {
   const [weekStart, setWeekStart] = useState(getWeekStart());
+  const { popups, popupsError } = usePopups();
 
   // Check if schedule is submitted for this week (synced from the admin device)
   const isPublished = !!(submittedWeeks && submittedWeeks[weekStart]);
@@ -4791,7 +4886,7 @@ function EmpSchedule({ employee, schedule, submittedWeeks }) {
     dayDate.setDate(dayDate.getDate() + di);
     const dateLabel = dayDate.toLocaleDateString("en-US", { month:"short", day:"numeric" }).toUpperCase();
     const shift = myShifts.find(s => s.dayIdx === di);
-    return { dayName, dateLabel, shift };
+    return { dayName, dateLabel, shift, popups: popupsOn(popups, addDays(weekStart, di)) };
   });
 
   return (
@@ -4806,6 +4901,7 @@ function EmpSchedule({ employee, schedule, submittedWeeks }) {
           <span style={{fontSize:14}}>&#9888;</span> Schedule for this week has not been published yet. Check back later.
         </div>
       )}
+      <PopupWeekStrip popups={popups} popupsError={popupsError} weekStart={weekStart} />
       {myShifts.length > 0 && (
         <div style={{textAlign:"right",fontSize:12,color:"var(--muted2)",marginBottom:10}}>
           Total: <strong style={{color:"var(--green)"}}>{totalHrs}h</strong> this week &middot; {myShifts.length} shift{myShifts.length>1?"s":""}
@@ -4821,6 +4917,7 @@ function EmpSchedule({ employee, schedule, submittedWeeks }) {
                 <div style={{textAlign:"center",padding:"12px 6px 8px",borderBottom:"1px solid var(--border)",background:"var(--bg4)"}}>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{day.dayName}</div>
                   <div style={{fontSize:11,color:"var(--muted2)",marginTop:2}}>({day.dateLabel})</div>
+                  {day.popups.map(p => <PopupChip key={p.id} p={p} />)}
                 </div>
                 <div style={{padding:"8px 6px"}}>
                   {!day.shift ? (
